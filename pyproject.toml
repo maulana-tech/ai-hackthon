@@ -62,3 +62,6 @@ python_version = "3.9"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/trendscout_supplier_connector"]
