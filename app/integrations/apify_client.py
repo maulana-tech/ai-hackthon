@@ -16,20 +16,22 @@ class ApifyIntegration:
     
     Supports:
     - Tokopedia scraping (jupri/tokopedia-scraper)
+    - Lazada scraping (getdataforme/lazada-product-scraper)
     - Instagram trend analysis
     - TikTok viral products
     
     Actor Configuration:
-    - Tokopedia: jupri/tokopedia-scraper (Primary marketplace scraper)
+    - Tokopedia: jupri/tokopedia-scraper
+    - Lazada: getdataforme/lazada-product-scraper (Malaysia/Indonesia)
     
     Notes:
     - Shopee removed (socket hang up errors, unstable)
-    - Lazada removed (insufficient credits)
-    - Tokopedia is the most reliable for Indonesian marketplace data
+    - Lazada re-added with proper actor (getdataforme)
     """
     
     # Actor names (verified and working)
     TOKOPEDIA_ACTOR = "jupri/tokopedia-scraper"
+    LAZADA_ACTOR = "getdataforme/lazada-product-scraper"
     
     def __init__(self):
         self.client = ApifyClient(settings.apify_api_key)
@@ -159,53 +161,73 @@ class ApifyIntegration:
     #         logger.error(f"Shopee scrape error: {str(e)}")
     #         return []
     
-    # Lazada scraper removed due to insufficient Apify credits
-    # If you want to re-enable, add credits and uncomment below
-    
-    # async def scrape_lazada(
-    #     self,
-    #     product_name: str,
-    #     max_items: int = 50,
-    #     min_rating: float = 4.0
-    # ) -> List[Dict[str, Any]]:
-    #     """
-    #     Scrape Lazada Indonesia for products
-    #     
-    #     Args:
-    #         product_name: Search query
-    #         max_items: Maximum products to scrape
-    #         min_rating: Minimum seller rating
-    #         
-    #     Returns:
-    #         List of product/seller data
-    #     """
-    #     try:
-    #         logger.info(f"Scraping Lazada: {product_name}")
-    #         
-    #         run_input = {
-    #             "search": product_name,
-    #             "maxItems": max_items,
-    #             "country": "id"
-    #         }
-    #         
-    #         run = await asyncio.to_thread(
-    #             lambda: self.client.actor("dtrungtin/lazada-scraper").call(run_input=run_input)
-    #         )
-    #         
-    #         items = []
-    #         dataset = self.client.dataset(run["defaultDatasetId"])
-    #         
-    #         for item in dataset.iterate_items():
-    #             seller_rating = item.get("sellerRating", 0)
-    #             if seller_rating >= min_rating:
-    #                 items.append(item)
-    #                 
-    #         logger.info(f"Scraped {len(items)} products from Lazada")
-    #         return items
-    #         
-    #     except Exception as e:
-    #         logger.error(f"Lazada scrape error: {str(e)}")
-    #         return []
+    async def scrape_lazada(
+        self,
+        product_name: str,
+        max_items: int = 50,
+        min_rating: float = 4.0
+    ) -> List[Dict[str, Any]]:
+        """
+        Scrape Lazada for products using getdataforme/lazada-product-scraper
+        
+        Args:
+            product_name: Search query
+            max_items: Maximum products to scrape
+            min_rating: Minimum product rating (0-5)
+            
+        Returns:
+            List of product data with URLs, prices, ratings, etc.
+        """
+        try:
+            logger.info(f"Scraping Lazada: {product_name}")
+            
+            # Correct input format for getdataforme/lazada-product-scraper
+            run_input = {
+                "query": product_name,
+                "item_limit": max_items,
+                "proxyConfiguration": {
+                    "useApifyProxy": True,
+                    "apifyProxyGroups": ["RESIDENTIAL"],
+                    "apifyProxyCountry": "MY"  # Malaysia (also works for Indonesia)
+                }
+            }
+            
+            run = await asyncio.to_thread(
+                lambda: self.client.actor(self.LAZADA_ACTOR).call(run_input=run_input)
+            )
+            
+            items = []
+            dataset = self.client.dataset(run["defaultDatasetId"])
+            
+            for item in dataset.iterate_items():
+                # Filter by rating (Lazada uses rating_score out of 5)
+                rating = float(item.get("rating_score", 0))
+                if rating >= min_rating:
+                    # Normalize data structure
+                    product = {
+                        "product_id": item.get("product_id"),
+                        "name": item.get("product_name"),
+                        "url": item.get("product_url"),
+                        "price": item.get("price"),
+                        "original_price": item.get("original_price"),
+                        "rating": rating,
+                        "review_count": int(item.get("review_count", 0)),
+                        "location": item.get("location"),
+                        "seller_name": item.get("seller_name"),
+                        "seller_id": item.get("seller_id"),
+                        "brand": item.get("brand"),
+                        "image_url": item.get("image_url"),
+                        "in_stock": item.get("in_stock", True),
+                        "platform": "Lazada"
+                    }
+                    items.append(product)
+                    
+            logger.info(f"Scraped {len(items)} products from Lazada")
+            return items
+            
+        except Exception as e:
+            logger.error(f"Lazada scrape error: {str(e)}")
+            return []
     
     async def scrape_instagram_hashtag(
         self,
@@ -307,15 +329,15 @@ class ApifyIntegration:
         try:
             logger.info(f"Scraping all marketplaces: {product_name}")
             
-            # Run all scrapers in parallel
+            # Run all scrapers in parallel (Shopee removed - unstable)
             results = await asyncio.gather(
                 self.scrape_tokopedia(product_name, max_items_per_marketplace, min_rating),
-                self.scrape_shopee(product_name, max_items_per_marketplace, min_rating),
                 self.scrape_lazada(product_name, max_items_per_marketplace, min_rating),
                 return_exceptions=True
             )
             
-            tokopedia, shopee, lazada = results
+            tokopedia, lazada = results
+            shopee = []  # Shopee disabled
             
             return {
                 "tokopedia": tokopedia if isinstance(tokopedia, list) else [],
