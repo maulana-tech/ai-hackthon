@@ -75,10 +75,22 @@ class SuperAgent:
             
             # Step 2: Classify intent
             intent_result = await self.intent_classifier.classify(query, context)
-            intent = intent_result['intent']
-            params = intent_result['parameters']
             
-            logger.info(f"[{job_id}] Intent: {intent}, Confidence: {intent_result['confidence']}")
+            # Validate intent_result has required fields
+            if not intent_result or 'intent' not in intent_result:
+                logger.error(f"[{job_id}] Invalid intent_result: {intent_result}")
+                # Use fallback
+                intent_result = {
+                    'intent': 'find_trending_suppliers',
+                    'confidence': 0.5,
+                    'parameters': {}
+                }
+            
+            intent = intent_result['intent']
+            params = intent_result.get('parameters', {})
+            confidence = intent_result.get('confidence', 0.5)
+            
+            logger.info(f"[{job_id}] Intent: {intent}, Confidence: {confidence}")
             
             # Step 3: Route to appropriate workflow
             if intent == "find_trending_products":
@@ -107,8 +119,17 @@ class SuperAgent:
                     "intent": intent
                 }
             
-            # Step 4: Save to memory
-            await self.memory_keeper.save_interaction(user_id, result)
+            # Step 4: Save to memory (only if it's a FinalReport object)
+            # For dict results from workflows, memory saving is handled within workflows
+            try:
+                if hasattr(result, 'job_id'):
+                    # This is a FinalReport object
+                    await self.memory_keeper.save_interaction(user_id, result)
+                else:
+                    # This is a dict result, log interaction summary
+                    logger.info(f"[{job_id}] Completed with status: {result.get('status')}")
+            except Exception as e:
+                logger.warning(f"[{job_id}] Could not save to memory: {str(e)}")
             
             return result
             

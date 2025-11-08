@@ -141,6 +141,9 @@ async def circlo_webhook_handler(payload: CircloWebhookPayload, request: Request
         
         logger.info(f"[GetCirclo Webhook] Generated response length: {len(response_text)} chars")
         
+        # Note: Memory is saved inside super_agent.execute()
+        # No need to save again here
+        
         return CircloWebhookResponse(response=response_text)
         
     except Exception as e:
