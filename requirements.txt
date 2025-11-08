@@ -28,3 +28,4 @@ pillow==10.2.0
 numpy==1.26.3
 tenacity==8.2.3
 apify-client==1.8.0
+redis>=5.0.0

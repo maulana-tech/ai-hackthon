@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     
     database_url: str = "sqlite:///./data/trendscout.db"
     redis_url: str = "redis://localhost:6379/0"
+    redis_cache_ttl: int = 7200  # 2 hours in seconds
     
     max_retries: int = 3
     timeout_seconds: int = 120

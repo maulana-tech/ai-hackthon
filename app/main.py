@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 
 from app.config import get_settings
-from app.routes import agent_routes, circlo, circlo_webhook
+from app.routes import agent_routes, circlo, circlo_webhook, cache_routes
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,6 +32,7 @@ app.add_middleware(
 app.include_router(agent_routes.router)
 app.include_router(circlo.router)
 app.include_router(circlo_webhook.router)
+app.include_router(cache_routes.router)
 
 @app.get("/")
 async def root():

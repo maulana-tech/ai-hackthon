@@ -15,12 +15,21 @@ class ApifyIntegration:
     Apify API client for web scraping Indonesian marketplaces
     
     Supports:
-    - Tokopedia scraping
-    - Shopee scraping  
-    - Lazada scraping
+    - Tokopedia scraping (jupri/tokopedia-scraper)
     - Instagram trend analysis
     - TikTok viral products
+    
+    Actor Configuration:
+    - Tokopedia: jupri/tokopedia-scraper (Primary marketplace scraper)
+    
+    Notes:
+    - Shopee removed (socket hang up errors, unstable)
+    - Lazada removed (insufficient credits)
+    - Tokopedia is the most reliable for Indonesian marketplace data
     """
+    
+    # Actor names (verified and working)
+    TOKOPEDIA_ACTOR = "jupri/tokopedia-scraper"
     
     def __init__(self):
         self.client = ApifyClient(settings.apify_api_key)
@@ -46,18 +55,17 @@ class ApifyIntegration:
         try:
             logger.info(f"Scraping Tokopedia: {product_name}")
             
+            # Correct input format based on jupri/tokopedia-scraper docs
+            # Uses Tokopedia Query Language (TPQL)
             run_input = {
-                "searchQuery": product_name,
-                "maxItems": max_items,
-                "proxyConfiguration": {
-                    "useApifyProxy": True,
-                    "apifyProxyGroups": ["RESIDENTIAL"]
-                }
+                "query": [product_name],  # Array of search queries
+                "limit": max_items,       # Number of results per query
+                "filters": {}             # Optional filters
             }
             
-            # Run actor
+            # Run actor (using verified actor name)
             run = await asyncio.to_thread(
-                lambda: self.client.actor("apify/tokopedia-scraper").call(run_input=run_input)
+                lambda: self.client.actor(self.TOKOPEDIA_ACTOR).call(run_input=run_input)
             )
             
             # Get results
@@ -77,95 +85,127 @@ class ApifyIntegration:
             logger.error(f"Tokopedia scrape error: {str(e)}")
             return []
     
-    async def scrape_shopee(
-        self,
-        product_name: str,
-        max_items: int = 50,
-        min_rating: float = 4.0
-    ) -> List[Dict[str, Any]]:
-        """
-        Scrape Shopee Indonesia for products
-        
-        Args:
-            product_name: Search query
-            max_items: Maximum products to scrape
-            min_rating: Minimum shop rating
-            
-        Returns:
-            List of product/shop data
-        """
-        try:
-            logger.info(f"Scraping Shopee: {product_name}")
-            
-            run_input = {
-                "keyword": product_name,
-                "maxItems": max_items,
-                "country": "id",  # Indonesia
-            }
-            
-            run = await asyncio.to_thread(
-                lambda: self.client.actor("epctex/shopee-scraper").call(run_input=run_input)
-            )
-            
-            items = []
-            dataset = self.client.dataset(run["defaultDatasetId"])
-            
-            for item in dataset.iterate_items():
-                shop_rating = item.get("shopRating", 0)
-                if shop_rating >= min_rating:
-                    items.append(item)
-                    
-            logger.info(f"Scraped {len(items)} products from Shopee")
-            return items
-            
-        except Exception as e:
-            logger.error(f"Shopee scrape error: {str(e)}")
-            return []
+    # Shopee scraper removed due to unstable actor (socket hang up errors)
+    # Error: "socket hang up" when making API requests
+    # If you want to re-enable, fix actor or use different Shopee actor
     
-    async def scrape_lazada(
-        self,
-        product_name: str,
-        max_items: int = 50,
-        min_rating: float = 4.0
-    ) -> List[Dict[str, Any]]:
-        """
-        Scrape Lazada Indonesia for products
-        
-        Args:
-            product_name: Search query
-            max_items: Maximum products to scrape
-            min_rating: Minimum seller rating
-            
-        Returns:
-            List of product/seller data
-        """
-        try:
-            logger.info(f"Scraping Lazada: {product_name}")
-            
-            run_input = {
-                "search": product_name,
-                "maxItems": max_items,
-                "country": "id"
-            }
-            
-            run = await asyncio.to_thread(
-                lambda: self.client.actor("apify/lazada-scraper").call(run_input=run_input)
-            )
-            
-            items = []
-            dataset = self.client.dataset(run["defaultDatasetId"])
-            
-            for item in dataset.iterate_items():
-                seller_rating = item.get("sellerRating", 0)
-                if seller_rating >= min_rating:
-                    items.append(item)
-                    
-            logger.info(f"Scraped {len(items)} products from Lazada")
-            return items
-            
-        except Exception as e:
-            logger.error(f"Lazada scrape error: {str(e)}")
-            return []
+    # async def scrape_shopee(
+    #     self,
+    #     product_name: str,
+    #     max_items: int = 50,
+    #     min_rating: float = 4.0
+    # ) -> List[Dict[str, Any]]:
+    #     """
+    #     Scrape Shopee Indonesia for products
+    #     
+    #     Args:
+    #         product_name: Search query
+    #         max_items: Maximum products to scrape
+    #         min_rating: Minimum shop rating
+    #         
+    #     Returns:
+    #         List of product/shop data
+    #     """
+    #     try:
+    #         logger.info(f"Scraping Shopee: {product_name}")
+    #         
+    #         # Correct input format based on best_scraper/shopee-scraper docs
+    #         # Uses Shopee API with direct requests
+    #         import urllib.parse
+    #         encoded_keyword = urllib.parse.quote(product_name)
+    #         
+    #         run_input = {
+    #             "requests": [
+    #                 {
+    #                     "url": f"https://shopee.co.id/api/v4/search/search_items?keyword={encoded_keyword}&limit={max_items}&newest=0&order=desc&page_type=search&scenario=PAGE_GLOBAL_SEARCH&version=2",
+    #                     "method": "GET"
+    #                 }
+    #             ],
+    #             "cookie": ""  # Optional: Add Shopee cookies for better access
+    #         }
+    #         
+    #         run = await asyncio.to_thread(
+    #             lambda: self.client.actor("best_scraper/shopee-scraper").call(run_input=run_input)
+    #         )
+    #         
+    #         items = []
+    #         dataset = self.client.dataset(run["defaultDatasetId"])
+    #         
+    #         # Parse Shopee API response
+    #         # Format: [{"data": {"items": [...]}}]
+    #         for response in dataset.iterate_items():
+    #             if isinstance(response, dict):
+    #                 # Get items from API response
+    #                 data = response.get("data", {})
+    #                 search_items = data.get("items", [])
+    #                 
+    #                 for item in search_items:
+    #                     # Shopee API returns item data differently
+    #                     item_basic = item.get("item_basic", item)
+    #                     shop_rating = item_basic.get("shop_rating", 0)
+    #                     
+    #                     if shop_rating >= min_rating:
+    #                         items.append(item_basic)
+    #             else:
+    #                 # Fallback for old format
+    #                 shop_rating = response.get("shopRating", 0)
+    #                 if shop_rating >= min_rating:
+    #                     items.append(response)
+    #                     
+    #         logger.info(f"Scraped {len(items)} products from Shopee")
+    #         return items
+    #         
+    #     except Exception as e:
+    #         logger.error(f"Shopee scrape error: {str(e)}")
+    #         return []
+    
+    # Lazada scraper removed due to insufficient Apify credits
+    # If you want to re-enable, add credits and uncomment below
+    
+    # async def scrape_lazada(
+    #     self,
+    #     product_name: str,
+    #     max_items: int = 50,
+    #     min_rating: float = 4.0
+    # ) -> List[Dict[str, Any]]:
+    #     """
+    #     Scrape Lazada Indonesia for products
+    #     
+    #     Args:
+    #         product_name: Search query
+    #         max_items: Maximum products to scrape
+    #         min_rating: Minimum seller rating
+    #         
+    #     Returns:
+    #         List of product/seller data
+    #     """
+    #     try:
+    #         logger.info(f"Scraping Lazada: {product_name}")
+    #         
+    #         run_input = {
+    #             "search": product_name,
+    #             "maxItems": max_items,
+    #             "country": "id"
+    #         }
+    #         
+    #         run = await asyncio.to_thread(
+    #             lambda: self.client.actor("dtrungtin/lazada-scraper").call(run_input=run_input)
+    #         )
+    #         
+    #         items = []
+    #         dataset = self.client.dataset(run["defaultDatasetId"])
+    #         
+    #         for item in dataset.iterate_items():
+    #             seller_rating = item.get("sellerRating", 0)
+    #             if seller_rating >= min_rating:
+    #                 items.append(item)
+    #                 
+    #         logger.info(f"Scraped {len(items)} products from Lazada")
+    #         return items
+    #         
+    #     except Exception as e:
+    #         logger.error(f"Lazada scrape error: {str(e)}")
+    #         return []
     
     async def scrape_instagram_hashtag(
         self,

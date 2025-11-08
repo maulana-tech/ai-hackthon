@@ -41,10 +41,20 @@ env/
 # Logs
 logs/*.log
 *.log
+/tmp/*.log
 
 # Data
 data/*/
 !data/.gitkeep
+
+# Temporary MD files (summaries, status updates)
+*_SUMMARY.md
+*_RESULTS.md
+*_COMPLETE.md
+*_RUNNING.md
+*_CONFIGURED.md
+*_FIX.md
+cleanup_analysis.md
 
 # MacOS
 .DS_Store
