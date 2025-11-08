@@ -18,6 +18,7 @@ from app.agents.trend_analyst import TrendAnalystAgent
 from app.agents.supplier_scout import SupplierScoutAgent
 from app.agents.outreach_agent import OutreachAgent
 from app.agents.memory_keeper import MemoryKeeperAgent
+from app.agents.bestseller_finder import BestsellerFinder
 from app.integrations.getcirclo_client import GetCircloClient
 from app.config import get_settings
 
@@ -43,6 +44,7 @@ class SuperAgent:
         self.supplier_scout = SupplierScoutAgent()
         self.outreach_agent = OutreachAgent()
         self.memory_keeper = MemoryKeeperAgent()
+        self.bestseller_finder = BestsellerFinder()
         self.circlo = GetCircloClient()
         self.jobs = {}
         
@@ -87,6 +89,9 @@ class SuperAgent:
                 
             elif intent == "find_trending_suppliers":
                 result = await self.workflow_trending_suppliers(job_id, query, user_id, params)
+            
+            elif intent == "find_bestsellers":
+                result = await self.workflow_find_bestsellers(job_id, query, user_id, params)
                 
             elif intent == "contact_suppliers":
                 result = await self.workflow_contact_suppliers(job_id, user_id, params)
@@ -265,6 +270,101 @@ class SuperAgent:
         }
         
         return report
+    
+    async def workflow_find_bestsellers(
+        self,
+        job_id: str,
+        query: str,
+        user_id: str,
+        params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Workflow: Find bestselling products from marketplaces + auto-find suppliers
+        
+        This is the ADVANCED workflow that:
+        1. Scrapes real marketplace data to find bestsellers
+        2. Ranks by sales volume, rating, reviews
+        3. Auto-finds suppliers for top products
+        4. Returns actionable insights
+        """
+        logger.info(f"[{job_id}] Executing: Find Bestsellers (Advanced Discovery)")
+        
+        # Step 1: Find bestselling products from marketplaces
+        self._update_job_status(job_id, JobStatus.ANALYZING, 10, "🔍 Discovering bestselling products...")
+        
+        category = params.get("product_category") or params.get("category")
+        marketplace = params.get("marketplace")  # Can be None for all marketplaces
+        limit = params.get("limit", 10)
+        min_sold = params.get("min_sold", 100)  # Minimum units sold to qualify as bestseller
+        
+        bestsellers = await self.bestseller_finder.find_bestsellers(
+            category=category,
+            marketplace=marketplace,
+            limit=limit,
+            min_sold=min_sold,
+            min_rating=params.get("min_rating", 4.0)
+        )
+        
+        if not bestsellers:
+            return {
+                "job_id": job_id,
+                "status": "completed",
+                "message": "❌ No bestselling products found. Try adjusting your criteria.",
+                "results": {
+                    "bestsellers": [],
+                    "suppliers": []
+                }
+            }
+        
+        # Step 2: Generate bestseller report
+        self._update_job_status(job_id, JobStatus.ANALYZING, 40, f"📊 Analyzing {len(bestsellers)} products...")
+        
+        report = await self.bestseller_finder.generate_bestseller_report(bestsellers)
+        
+        # Step 3: Auto-find suppliers for top 3 bestselling products
+        self._update_job_status(job_id, JobStatus.SEARCHING_SUPPLIERS, 60, "🏪 Finding suppliers...")
+        
+        suppliers_by_product = {}
+        
+        for i, product in enumerate(bestsellers[:3], 1):
+            try:
+                suppliers = await self.supplier_scout.find_suppliers(
+                    product_name=product.name,
+                    location=params.get("location"),
+                    min_rating=4.0,
+                    limit=3
+                )
+                
+                if suppliers:
+                    suppliers_by_product[product.name] = [s.model_dump() for s in suppliers]
+                    logger.info(f"Found {len(suppliers)} suppliers for {product.name}")
+                
+            except Exception as e:
+                logger.warning(f"Failed to find suppliers for {product.name}: {str(e)}")
+        
+        # Step 4: Complete
+        self._update_job_status(job_id, JobStatus.COMPLETED, 100, "✅ Bestseller discovery complete")
+        
+        return {
+            "job_id": job_id,
+            "status": "completed",
+            "intent": "find_bestsellers",
+            "query": query,
+            "results": {
+                "bestsellers": [p.model_dump() for p in bestsellers],
+                "count": len(bestsellers),
+                "suppliers_by_product": suppliers_by_product,
+                "report": report,
+                "summary": {
+                    "total_products": len(bestsellers),
+                    "total_sold": sum(p.total_sold or 0 for p in bestsellers),
+                    "avg_rating": round(sum(p.rating or 0 for p in bestsellers) / len(bestsellers), 2),
+                    "official_stores": sum(1 for p in bestsellers if p.is_official),
+                    "marketplaces": list(set(p.platform for p in bestsellers)),
+                    "categories": list(set(p.category for p in bestsellers))
+                }
+            }
+        }
     
     async def workflow_contact_suppliers(
         self,

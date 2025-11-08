@@ -134,6 +134,7 @@ Analyze the user's query and return a JSON object with:
 3. "parameters" - extracted parameters
 
 Available intents:
+- "find_bestsellers": User wants to find the most popular/bestselling products from marketplaces (based on sales data)
 - "find_trending_products": User wants to know what products are trending
 - "find_suppliers": User wants to find suppliers for a specific product
 - "find_trending_suppliers": User wants both trending analysis AND suppliers (most common)
@@ -153,6 +154,26 @@ Extract these parameters if mentioned:
 - "contact_method": preferred contact (e.g., "whatsapp", "email")
 
 Examples:
+
+Query: "Carikan produk yang paling laris"
+Output: {
+  "intent": "find_bestsellers",
+  "confidence": 0.95,
+  "parameters": {
+    "limit": 10,
+    "min_sold": 100
+  }
+}
+
+Query: "Produk fashion apa yang paling banyak terjual di Tokopedia?"
+Output: {
+  "intent": "find_bestsellers",
+  "confidence": 0.9,
+  "parameters": {
+    "product_category": "fashion",
+    "marketplace": "tokopedia"
+  }
+}
 
 Query: "Cari produk skincare yang lagi tren"
 Output: {
@@ -195,6 +216,17 @@ Always respond with valid JSON only, no additional text."""
     def _fallback_classify(self, query: str) -> Dict[str, Any]:
         """Simple fallback classification using keywords"""
         query_lower = query.lower()
+        
+        # Check for bestseller/terlaris keywords first (highest priority)
+        if any(word in query_lower for word in ["terlaris", "paling laris", "bestseller", "best seller", "paling banyak terjual", "most sold"]):
+            return {
+                "intent": "find_bestsellers",
+                "confidence": 0.8,
+                "parameters": {
+                    "limit": 10,
+                    "min_sold": 100
+                }
+            }
         
         # Keyword-based classification
         if any(word in query_lower for word in ["trending", "tren", "viral", "populer"]):

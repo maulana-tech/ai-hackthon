@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """Quick test for Intent Classifier"""
 
+import sys
+from pathlib import Path
+
+# Add parent directory to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import asyncio
 from app.agents.intent_classifier import IntentClassifier
 
