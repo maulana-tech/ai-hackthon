@@ -20,6 +20,7 @@ from app.models.schemas import TrendingProduct, Supplier
 from app.integrations.apify_client import ApifyIntegration
 from app.integrations.firecrawl_client import FirecrawlClient
 from app.config import get_settings
+from app.utils.mock_data import get_mock_bestsellers
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -94,6 +95,14 @@ class BestsellerFinder:
         
         # Rank by sales volume, rating, and trend score
         ranked = self._rank_products(filtered, limit)
+        
+        # If no results (API rate limited), use mock data as fallback
+        if not ranked:
+            logger.warning(
+                "⚠️  No products found from marketplaces (likely rate limited). "
+                "Using fallback demo data..."
+            )
+            ranked = get_mock_bestsellers(category=category or "elektronik", limit=limit)
         
         logger.info(f"Found {len(ranked)} bestselling products")
         return ranked

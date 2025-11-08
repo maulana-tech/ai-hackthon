@@ -116,13 +116,14 @@ async def execute_workflow(
     background_tasks: BackgroundTasks = None
 ):
     """
-    Execute complete workflow from trend analysis to supplier contact
-    This is the main endpoint that orchestrates all agents
+    Execute complete workflow with intent classification
+    This is the main endpoint that routes to appropriate agent based on intent
     """
     try:
         logger.info(f"Executing workflow for query: {query}")
         
-        report = await super_agent.execute_full_workflow(
+        # Use the new execute method which does intent classification
+        result = await super_agent.execute(
             query=query,
             user_id=user_id,
             quantity=quantity,
@@ -131,10 +132,7 @@ async def execute_workflow(
             auto_contact=auto_contact
         )
         
-        return {
-            "success": True,
-            "data": report.model_dump()
-        }
+        return result
         
     except Exception as e:
         logger.error(f"Error executing workflow: {str(e)}")
