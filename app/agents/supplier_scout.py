@@ -6,6 +6,7 @@ import httpx
 
 from app.models.schemas import Supplier
 from app.integrations.firecrawl_client import FirecrawlClient
+from app.integrations.apify_client import ApifyIntegration
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -16,40 +17,112 @@ class SupplierScoutAgent:
     
     def __init__(self):
         self.firecrawl = FirecrawlClient()
+        self.apify = ApifyIntegration()
         self.name = "Supplier Scout Agent"
+        self.use_apify = True  # Flag to enable/disable Apify
         
     async def find_suppliers(
         self,
         product_name: str,
         location: Optional[str] = None,
         min_rating: float = 4.0,
-        limit: int = 5
+        limit: int = 5,
+        use_apify: Optional[bool] = None
     ) -> List[Supplier]:
-        """Main method to find suppliers from multiple marketplaces"""
+        """
+        Main method to find suppliers from multiple marketplaces
+        
+        Args:
+            product_name: Product to search
+            location: Optional location filter
+            min_rating: Minimum supplier rating
+            limit: Maximum suppliers to return
+            use_apify: Use Apify (faster) or Firecrawl (more flexible)
+            
+        Returns:
+            List of ranked suppliers
+        """
         logger.info(f"Starting supplier search for: {product_name}")
         
-        tasks = [
-            self._search_indonetwork(product_name, min_rating),
-            self._search_tokopedia(product_name, min_rating),
-            self._search_shopee(product_name, min_rating),
-            self._search_lazada(product_name, min_rating)
-        ]
+        # Determine which scraping method to use
+        use_apify_flag = use_apify if use_apify is not None else self.use_apify
         
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        if use_apify_flag:
+            # Use Apify for faster, more reliable scraping
+            logger.info("Using Apify for marketplace scraping")
+            all_suppliers = await self._search_with_apify(product_name, min_rating, limit)
+        else:
+            # Use Firecrawl for custom sites
+            logger.info("Using Firecrawl for marketplace scraping")
+            all_suppliers = await self._search_with_firecrawl(product_name, min_rating)
         
-        all_suppliers = []
-        for result in results:
-            if isinstance(result, list):
-                all_suppliers.extend(result)
-            elif isinstance(result, Exception):
-                logger.warning(f"Task failed: {str(result)}")
-                
+        # Filter by location if specified
         if location:
             all_suppliers = [s for s in all_suppliers if location.lower() in s.location.lower()]
             
+        # Rank and filter
         ranked_suppliers = self._rank_and_filter(all_suppliers, limit)
         
         return ranked_suppliers
+    
+    async def _search_with_apify(
+        self,
+        product_name: str,
+        min_rating: float,
+        limit: int
+    ) -> List[Supplier]:
+        """Search using Apify (faster, more reliable)"""
+        try:
+            # Scrape marketplaces in parallel with Apify
+            suppliers = await self.apify.get_suppliers_from_all_marketplaces(
+                product_name=product_name,
+                max_suppliers=limit * 3,  # Get more for filtering
+                min_rating=min_rating
+            )
+            
+            # Also search Indonetwork with Firecrawl (B2B specific)
+            indonetwork_suppliers = await self._search_indonetwork(product_name, min_rating)
+            
+            # Combine results
+            all_suppliers = suppliers + indonetwork_suppliers
+            
+            logger.info(f"Found {len(all_suppliers)} suppliers via Apify + Firecrawl")
+            return all_suppliers
+            
+        except Exception as e:
+            logger.error(f"Apify search error: {str(e)}")
+            # Fallback to Firecrawl
+            return await self._search_with_firecrawl(product_name, min_rating)
+    
+    async def _search_with_firecrawl(
+        self,
+        product_name: str,
+        min_rating: float
+    ) -> List[Supplier]:
+        """Search using Firecrawl (fallback method)"""
+        try:
+            tasks = [
+                self._search_indonetwork(product_name, min_rating),
+                self._search_tokopedia(product_name, min_rating),
+                self._search_shopee(product_name, min_rating),
+                self._search_lazada(product_name, min_rating)
+            ]
+            
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            all_suppliers = []
+            for result in results:
+                if isinstance(result, list):
+                    all_suppliers.extend(result)
+                elif isinstance(result, Exception):
+                    logger.warning(f"Task failed: {str(result)}")
+            
+            logger.info(f"Found {len(all_suppliers)} suppliers via Firecrawl")
+            return all_suppliers
+            
+        except Exception as e:
+            logger.error(f"Firecrawl search error: {str(e)}")
+            return []
         
     async def _search_indonetwork(self, product_name: str, min_rating: float) -> List[Supplier]:
         """Search Indonetwork.co.id for B2B suppliers with full contact details"""
