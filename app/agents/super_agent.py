@@ -19,6 +19,8 @@ from app.agents.supplier_scout import SupplierScoutAgent
 from app.agents.outreach_agent import OutreachAgent
 from app.agents.memory_keeper import MemoryKeeperAgent
 from app.agents.bestseller_finder import BestsellerFinder
+from app.agents.supplier_email_agent import supplier_email_agent, EmailRequest
+from app.agents.marketing_campaign_agent import marketing_campaign_agent, CampaignRequest
 from app.integrations.getcirclo_client import GetCircloClient
 from app.config import get_settings
 
@@ -107,6 +109,9 @@ class SuperAgent:
                 
             elif intent == "contact_suppliers":
                 result = await self.workflow_contact_suppliers(job_id, user_id, params)
+                
+            elif intent == "create_campaign":
+                result = await self.workflow_create_campaign(job_id, user_id, params, query)
                 
             elif intent == "get_status":
                 result = await self.workflow_get_status(job_id, user_id, params)
@@ -393,36 +398,164 @@ class SuperAgent:
         user_id: str,
         params: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Workflow: Contact previously found suppliers"""
-        logger.info(f"[{job_id}] Executing: Contact Suppliers")
+        """Workflow: Send email to suppliers about a product"""
+        logger.info(f"[{job_id}] Executing: Contact Suppliers via Email")
         
-        # Get last search results from memory
-        history = await self.memory_keeper.get_history(user_id, limit=1)
+        # Extract parameters
+        product_name = params.get('product') or params.get('product_name') or params.get('category')
+        buyer_name = params.get('buyer_name') or params.get('name', 'Customer')
+        buyer_email = params.get('buyer_email') or params.get('email')
+        buyer_phone = params.get('buyer_phone') or params.get('phone')
+        quantity = params.get('quantity')
+        message = params.get('message')
+        marketplace = params.get('marketplace')
         
-        if not history or not history[0].get("suppliers"):
+        if not product_name:
+            # Try to get from last search
+            history = await self.memory_keeper.get_history(user_id, limit=1)
+            if history and history[0].get("bestsellers"):
+                # Get first bestseller product
+                bestsellers = history[0]["bestsellers"]
+                if bestsellers:
+                    product_name = bestsellers[0].get('name', 'Product')
+        
+        if not product_name:
             return {
                 "job_id": job_id,
-                "status": "completed",
-                "message": "No previous suppliers found. Please search for suppliers first."
+                "status": "failed",
+                "intent": "contact_suppliers",
+                "message": "Product name is required",
+                "results": {}
             }
         
-        # Contact suppliers
-        suppliers_data = history[0]["suppliers"]
-        suppliers = [Supplier(**s) for s in suppliers_data[:5]]
+        # Default buyer info if not provided
+        if not buyer_email:
+            buyer_email = "buyer@example.com"  # Should get from user profile
         
-        messages = await self.outreach_agent.contact_suppliers(
-            product_name=params.get("product", "Product"),
-            quantity=params.get("quantity", 20),
-            suppliers=suppliers
+        # Create email request
+        email_request = EmailRequest(
+            product_name=product_name,
+            buyer_name=buyer_name,
+            buyer_email=buyer_email,
+            buyer_phone=buyer_phone,
+            quantity=quantity,
+            message=message,
+            marketplace=marketplace
         )
+        
+        # Send emails via SupplierEmailAgent
+        email_result = await supplier_email_agent.send_product_inquiry(email_request)
+        
+        return {
+            "job_id": job_id,
+            "status": "completed" if email_result.status != "failed" else "failed",
+            "intent": "contact_suppliers",
+            "results": {
+                "email_status": email_result.status,
+                "sent": email_result.sent,
+                "failed": email_result.failed,
+                "total": email_result.total,
+                "suppliers_contacted": email_result.suppliers_contacted,
+                "message": email_result.message,
+                "details": email_result.details
+            }
+        }
+    
+    async def workflow_create_campaign(
+        self,
+        job_id: str,
+        user_id: str,
+        params: Dict[str, Any],
+        query: str = ""
+    ) -> Dict[str, Any]:
+        """Workflow: Create AI-generated marketing campaign"""
+        logger.info(f"[{job_id}] Executing: Create Marketing Campaign")
+        
+        # Get product info from params or query or last search
+        product_name = params.get('product') or params.get('product_name')
+        category = params.get('category') or params.get('product_category')
+        budget = params.get('budget')
+        duration = params.get('duration')
+        
+        # Extract product from query if not in params
+        if not product_name and query:
+            # Simple extraction: anything after "untuk produk", "untuk", or use general terms
+            import re
+            match = re.search(r'(?:untuk produk|untuk|campaign untuk)\s+(.+)', query.lower())
+            if match:
+                product_name = match.group(1).strip()
+            else:
+                # Use generic product name if not specified
+                product_name = "produk kami"
+        
+        if not product_name:
+            # Try to get from last bestseller search
+            history = await self.memory_keeper.get_history(user_id, limit=1)
+            if history and history[0].get("bestsellers"):
+                bestsellers = history[0]["bestsellers"]
+                if bestsellers:
+                    # Create campaigns for all bestsellers
+                    logger.info(f"Creating campaigns for {len(bestsellers)} bestsellers")
+                    campaigns = await marketing_campaign_agent.generate_bulk_campaigns(
+                        products=bestsellers[:3],  # Limit to 3 products
+                        base_budget=budget or "Rp 5.000.000"
+                    )
+                    
+                    return {
+                        "job_id": job_id,
+                        "status": "completed",
+                        "intent": "create_campaign",
+                        "results": {
+                            "campaigns_created": len(campaigns),
+                            "campaigns": [
+                                {
+                                    "product": c.product_name,
+                                    "tagline": c.campaign_content.split('\n')[0] if c.campaign_content else "Campaign Ready",
+                                    "budget": c.budget_breakdown.get("total_budget", budget),
+                                    "duration": c.schedule.get("duration_days", 30),
+                                    "sheet_url": c.sheet_url
+                                }
+                                for c in campaigns
+                            ],
+                            "message": f"✅ {len(campaigns)} kampanye marketing berhasil dibuat!"
+                        }
+                    }
+        
+        if not product_name:
+            return {
+                "job_id": job_id,
+                "status": "failed",
+                "intent": "create_campaign",
+                "message": "Product name required for campaign creation",
+                "results": {}
+            }
+        
+        # Create single campaign
+        campaign_request = CampaignRequest(
+            product_name=product_name,
+            product_category=category or "General",
+            budget_range=budget or "Rp 5.000.000",
+            duration_days=duration or 30
+        )
+        
+        campaign = await marketing_campaign_agent.generate_campaign(campaign_request)
         
         return {
             "job_id": job_id,
             "status": "completed",
-            "intent": "contact_suppliers",
+            "intent": "create_campaign",
             "results": {
-                "suppliers_contacted": len(suppliers),
-                "messages": [m.model_dump() for m in messages]
+                "campaign": {
+                    "product": campaign.product_name,
+                    "content": campaign.campaign_content,
+                    "schedule": campaign.schedule,
+                    "budget": campaign.budget_breakdown,
+                    "platforms": campaign.platforms_strategy,
+                    "kpis": campaign.kpis,
+                    "recommendations": campaign.recommendations,
+                    "sheet_url": campaign.sheet_url
+                },
+                "message": f"✅ Kampanye marketing untuk {product_name} berhasil dibuat!"
             }
         }
     

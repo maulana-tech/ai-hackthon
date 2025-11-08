@@ -1,28 +1,12 @@
 import logging
 from typing import Dict, Any, Optional
-from openai import AsyncOpenAI
+import json
+import httpx
 
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
-
-# Configure LLM client based on provider
-if settings.llm_provider == "openrouter" and settings.openrouter_api_key:
-    logger.info(f"Using OpenRouter with model: {settings.llm_model}")
-    llm_client = AsyncOpenAI(
-        api_key=settings.openrouter_api_key,
-        base_url="https://openrouter.ai/api/v1"
-    )
-    llm_model = settings.llm_model
-elif settings.openai_api_key:
-    logger.info("Using OpenAI")
-    llm_client = AsyncOpenAI(api_key=settings.openai_api_key)
-    llm_model = "gpt-3.5-turbo"
-else:
-    logger.warning("No LLM API key configured, will use fallback classification")
-    llm_client = None
-    llm_model = None
 
 
 class IntentClassifier:
@@ -67,61 +51,62 @@ class IntentClassifier:
             }
         """
         try:
-            # Check if LLM client is available
-            if not llm_client:
-                logger.warning("No LLM client available, using fallback")
+            # Check if Gemini API key is available
+            if not settings.gemini_api_key:
+                logger.warning("No Gemini API key, using fallback")
                 return self._fallback_classify(query)
             
             logger.info(f"Classifying intent for query: {query}")
             
             system_prompt = self._get_system_prompt()
+            full_prompt = f"{system_prompt}\n\nQuery: {query}"
             
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": query}
-            ]
+            # Use Gemini for fast classification
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={settings.gemini_api_key}"
             
-            # Add context if available
-            if context and context.get("history"):
-                context_msg = f"User's recent queries: {context['history'][-3:]}"
-                messages.insert(1, {"role": "system", "content": context_msg})
-            
-            # Use configured LLM model
-            response = await llm_client.chat.completions.create(
-                model=llm_model,
-                messages=messages,
-                temperature=0.3,
-                max_tokens=500,
-                response_format={"type": "json_object"} if settings.llm_provider == "openai" else None
-            )
-            
-            import json
-            content = response.choices[0].message.content
-            
-            # Try to extract JSON from response
-            try:
-                result = json.loads(content)
-            except json.JSONDecodeError:
-                # If model returns markdown code block, extract JSON
-                import re
-                json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', content, re.DOTALL)
-                if json_match:
-                    result = json.loads(json_match.group(1))
-                else:
-                    # Try to find any JSON object in the response
-                    json_match = re.search(r'\{.*\}', content, re.DOTALL)
-                    if json_match:
-                        result = json.loads(json_match.group(0))
-                    else:
-                        raise ValueError("Could not extract JSON from response")
-            
-            logger.info(f"Classified intent: {result.get('intent')} (confidence: {result.get('confidence')})")
-            
-            return result
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    url,
+                    headers={"Content-Type": "application/json"},
+                    json={
+                        "contents": [{
+                            "parts": [{
+                                "text": full_prompt
+                            }]
+                        }],
+                        "generationConfig": {
+                            "temperature": 0.3,
+                            "maxOutputTokens": 500,
+                        }
+                    }
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    
+                    # Extract text from Gemini response
+                    if "candidates" in data and len(data["candidates"]) > 0:
+                        candidate = data["candidates"][0]
+                        if "content" in candidate:
+                            parts = candidate["content"].get("parts", [])
+                            if parts and "text" in parts[0]:
+                                content = parts[0]["text"]
+                                
+                                # Parse JSON response
+                                import re
+                                json_match = re.search(r'\{.*\}', content, re.DOTALL)
+                                if json_match:
+                                    result = json.loads(json_match.group(0))
+                                    logger.info(f"✅ Classified: {result.get('intent')} (confidence: {result.get('confidence')})")
+                                    return result
+                
+                # Fallback if parsing fails
+                logger.warning("Gemini response parsing failed, using fallback")
+                return self._fallback_classify(query)
             
         except Exception as e:
             logger.error(f"Intent classification error: {str(e)}")
-            # Fallback to basic classification
+            # Fallback to keyword-based classification
             return self._fallback_classify(query)
     
     def _get_system_prompt(self) -> str:
@@ -249,10 +234,10 @@ Always respond with valid JSON only, no additional text."""
                 "parameters": {}
             }
         
-        if any(word in query_lower for word in ["hubungi", "contact", "kirim pesan", "whatsapp"]):
+        if any(word in query_lower for word in ["hubungi", "contact", "kirim pesan", "whatsapp", "kirim email", "kirimkan email", "email ke supplier"]):
             return {
                 "intent": "contact_suppliers",
-                "confidence": 0.7,
+                "confidence": 0.8,
                 "parameters": {}
             }
         
