@@ -131,34 +131,146 @@ class SupplierScoutAgent:
             
             search_url = f"https://www.indonetwork.co.id/search?q={product_name.replace(' ', '+')}"
             
-            actions = [
-                {"type": "wait", "milliseconds": 3000},
-                {"type": "scroll", "y": 1500},
-                {"type": "wait", "milliseconds": 1500}
-            ]
-            
-            result = await self.firecrawl.scrape_with_actions(
+            # First, get search results page
+            result = await self.firecrawl.scrape(
                 search_url,
-                actions=actions,
-                formats=[{
-                    "type": "json",
-                    "prompt": """Extract list of companies/suppliers with:
-                    - company_name
-                    - product_name
-                    - company_url (full URL to company page)
-                    - location/city
-                    - contact_person
-                    - phone
-                    - email
-                    - address
-                    - product_description
-                    - minimum_order_quantity"""
-                }]
+                formats=["markdown", "html"]
             )
             
+            if not result or 'linksOnPage' not in result:
+                logger.warning("No links found in search results")
+                return []
+            
+            # Extract product links
+            product_links = [
+                link for link in result.get('linksOnPage', [])
+                if '/product/' in link and 'indonetwork.co.id' in link
+            ]
+            
+            logger.info(f"Found {len(product_links)} product links")
+            
+            if not product_links:
+                return []
+            
+            # Scrape first 5 product pages for details
+            suppliers = []
+            for product_url in product_links[:5]:
+                try:
+                    logger.info(f"Scraping product: {product_url}")
+                    
+                    # Scrape individual product page with AI extraction
+                    product_result = await self.firecrawl.scrape(
+                        product_url,
+                        formats=["markdown"]
+                    )
+                    
+                    if product_result and 'markdown' in product_result:
+                        markdown = product_result['markdown']
+                        
+                        # Parse supplier info from markdown
+                        supplier = self._parse_indonetwork_product(markdown, product_url)
+                        if supplier and supplier.rating >= min_rating:
+                            suppliers.append(supplier)
+                    
+                    # Small delay between requests
+                    await asyncio.sleep(1)
+                    
+                except Exception as e:
+                    logger.error(f"Error scraping product {product_url}: {str(e)}")
+                    continue
+            
+            logger.info(f"Successfully scraped {len(suppliers)} suppliers from Indonetwork")
+            return suppliers
+            
+        except Exception as e:
+            logger.error(f"Error searching Indonetwork: {str(e)}")
+            return []
+    
+    def _parse_indonetwork_product(self, markdown: str, product_url: str) -> Optional[Supplier]:
+        """Parse Indonetwork product page markdown to extract supplier info"""
+        try:
+            import re
+            
+            # Extract company/seller name (usually in title or near "Penjual" or "Toko")
+            company_match = re.search(r'(?:Penjual|Toko|Perusahaan)[:\s]+([^\n]+)', markdown, re.IGNORECASE)
+            if not company_match:
+                # Try to extract from URL
+                company_match = re.search(r'/c/([^/]+)', product_url)
+            
+            company_name = company_match.group(1).strip() if company_match else "Unknown Supplier"
+            
+            # Extract product name (usually first heading or title)
+            product_match = re.search(r'^#\s+(.+)$', markdown, re.MULTILINE)
+            if not product_match:
+                product_match = re.search(r'\*\*(.+?)\*\*', markdown)
+            
+            product_name = product_match.group(1).strip() if product_match else "Product"
+            
+            # Extract location
+            location_match = re.search(r'(?:Lokasi|Kota|Daerah|Jakarta|Bandung|Surabaya|Yogyakarta|Bali|Semarang|Tangerang|Bekasi|Bogor|Depok)[:\s]*([^\n]+)', markdown, re.IGNORECASE)
+            location = location_match.group(1).strip() if location_match else "Indonesia"
+            
+            # Extract phone
+            phone_match = re.search(r'(?:Telp|Telepon|Phone|HP|WA|WhatsApp)[:\s]*([0-9\-\+\(\)\s]+)', markdown, re.IGNORECASE)
+            phone = phone_match.group(1).strip() if phone_match else ""
+            
+            # Extract email
+            email_match = re.search(r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', markdown)
+            email = email_match.group(1).strip() if email_match else ""
+            
+            # Extract price (Rp, IDR)
+            price_match = re.search(r'(?:Rp|IDR)[.\s]*([0-9.,]+)', markdown, re.IGNORECASE)
+            price = 0
+            if price_match:
+                price_str = price_match.group(1).replace('.', '').replace(',', '')
+                try:
+                    price = int(price_str)
+                except:
+                    price = 0
+            
+            # Extract MOQ
+            moq_match = re.search(r'(?:MOQ|Minimum Order|Min\. Order)[:\s]*([0-9]+)', markdown, re.IGNORECASE)
+            moq = int(moq_match.group(1)) if moq_match else 1
+            
+            # Extract city from location
+            city = location.split(',')[0].strip() if ',' in location else location.strip()
+            
+            # Create supplier object
+            supplier = Supplier(
+                name=company_name,
+                store_name=company_name,
+                marketplace="Indonetwork",
+                location=location,
+                city=city,
+                rating=4.5,  # Default rating for Indonetwork (B2B verified)
+                product_name=product_name,
+                price=price,
+                currency="IDR",
+                moq=moq,
+                minimum_order=moq,
+                stock_available=True,
+                phone=phone,
+                email=email,
+                product_url=product_url,
+                url=product_url,
+                image_url="",
+                verified=True,
+                response_rate=85.0
+            )
+            
+            logger.info(f"Parsed supplier: {company_name} - {product_name}")
+            return supplier
+            
+        except Exception as e:
+            logger.error(f"Error parsing Indonetwork product: {str(e)}")
+            return None
+    
+    async def _OLD_search_indonetwork_DEPRECATED(self, product_name: str, min_rating: float) -> List[Supplier]:
+        """OLD METHOD - DEPRECATED - kept for reference only"""
+        try:
             suppliers = []
             
-            if result and 'data' in result:
+            if False and result and 'data' in result:
                 data = result['data']
                 if 'json' in data:
                     json_data = data['json']

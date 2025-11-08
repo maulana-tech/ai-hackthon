@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from datetime import datetime
 import uuid
 
@@ -9,12 +9,16 @@ from app.models.schemas import (
     SupplierSearchRequest,
     OutreachRequest,
     FinalReport,
-    JobStatus
+    JobStatus,
+    TrendingProduct,
+    Supplier
 )
+from app.agents.intent_classifier import IntentClassifier
 from app.agents.trend_analyst import TrendAnalystAgent
 from app.agents.supplier_scout import SupplierScoutAgent
 from app.agents.outreach_agent import OutreachAgent
 from app.agents.memory_keeper import MemoryKeeperAgent
+from app.integrations.getcirclo_client import GetCircloClient
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -23,17 +27,325 @@ settings = get_settings()
 class SuperAgent:
     """
     Super Agent - Orchestrator that coordinates all sub-agents
-    Manages the complete workflow from user query to final report
+    
+    Enhanced with:
+    - Intent classification
+    - User context management
+    - Flexible workflow routing
+    - Progress tracking
+    - Memory integration
     """
     
     def __init__(self):
         self.name = "TrendScout Super Agent"
+        self.intent_classifier = IntentClassifier()
         self.trend_analyst = TrendAnalystAgent()
         self.supplier_scout = SupplierScoutAgent()
         self.outreach_agent = OutreachAgent()
         self.memory_keeper = MemoryKeeperAgent()
+        self.circlo = GetCircloClient()
         self.jobs = {}
         
+    async def execute(
+        self,
+        query: str,
+        user_id: str,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        Main entry point - Classify intent and route to appropriate workflow
+        
+        Args:
+            query: Natural language query from user
+            user_id: User identifier
+            **kwargs: Additional parameters
+            
+        Returns:
+            Result dict with job_id, status, and data
+        """
+        job_id = str(uuid.uuid4())
+        
+        logger.info(f"[{job_id}] New query from {user_id}: {query}")
+        
+        try:
+            # Step 1: Get user context
+            context = await self._get_user_context(user_id)
+            
+            # Step 2: Classify intent
+            intent_result = await self.intent_classifier.classify(query, context)
+            intent = intent_result['intent']
+            params = intent_result['parameters']
+            
+            logger.info(f"[{job_id}] Intent: {intent}, Confidence: {intent_result['confidence']}")
+            
+            # Step 3: Route to appropriate workflow
+            if intent == "find_trending_products":
+                result = await self.workflow_find_trends(job_id, query, params)
+                
+            elif intent == "find_suppliers":
+                result = await self.workflow_find_suppliers(job_id, query, params)
+                
+            elif intent == "find_trending_suppliers":
+                result = await self.workflow_trending_suppliers(job_id, query, user_id, params)
+                
+            elif intent == "contact_suppliers":
+                result = await self.workflow_contact_suppliers(job_id, user_id, params)
+                
+            elif intent == "get_status":
+                result = await self.workflow_get_status(job_id, user_id, params)
+                
+            else:
+                result = {
+                    "job_id": job_id,
+                    "status": "completed",
+                    "message": "Intent not yet implemented",
+                    "intent": intent
+                }
+            
+            # Step 4: Save to memory
+            await self.memory_keeper.save_interaction(user_id, result)
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"[{job_id}] Workflow error: {str(e)}", exc_info=True)
+            return {
+                "job_id": job_id,
+                "status": "failed",
+                "error": str(e)
+            }
+    
+    async def _get_user_context(self, user_id: str) -> Dict[str, Any]:
+        """Get user context from memory"""
+        try:
+            preferences = await self.memory_keeper.get_preference(user_id)
+            history = await self.memory_keeper.get_history(user_id, limit=5)
+            
+            return {
+                "user_id": user_id,
+                "preferences": preferences.model_dump() if preferences else {},
+                "history": history
+            }
+        except Exception as e:
+            logger.warning(f"Could not get user context: {str(e)}")
+            return {"user_id": user_id, "preferences": {}, "history": []}
+    
+    async def workflow_find_trends(
+        self,
+        job_id: str,
+        query: str,
+        params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Workflow: Find trending products only"""
+        logger.info(f"[{job_id}] Executing: Find Trends")
+        
+        self._update_job_status(job_id, JobStatus.ANALYZING, 10, "Analyzing trends...")
+        
+        category = params.get("product_category") or params.get("product_name") or query
+        
+        trends = await self.trend_analyst.analyze_trends(
+            query=category,
+            region=params.get("region", "global"),
+            limit=params.get("limit", 5)
+        )
+        
+        self._update_job_status(job_id, JobStatus.COMPLETED, 100, "Trends analysis complete")
+        
+        return {
+            "job_id": job_id,
+            "status": "completed",
+            "intent": "find_trending_products",
+            "query": query,
+            "results": {
+                "trending_products": [p.model_dump() for p in trends],
+                "count": len(trends)
+            }
+        }
+    
+    async def workflow_find_suppliers(
+        self,
+        job_id: str,
+        query: str,
+        params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Workflow: Find suppliers only"""
+        logger.info(f"[{job_id}] Executing: Find Suppliers")
+        
+        self._update_job_status(job_id, JobStatus.SEARCHING_SUPPLIERS, 20, "Searching suppliers...")
+        
+        product = params.get("product_name") or params.get("product_category") or query
+        
+        suppliers = await self.supplier_scout.find_suppliers(
+            product_name=product,
+            location=params.get("location"),
+            min_rating=params.get("min_rating", 4.0),
+            limit=params.get("limit", 5)
+        )
+        
+        self._update_job_status(job_id, JobStatus.COMPLETED, 100, f"Found {len(suppliers)} suppliers")
+        
+        return {
+            "job_id": job_id,
+            "status": "completed",
+            "intent": "find_suppliers",
+            "query": query,
+            "results": {
+                "product": product,
+                "suppliers": [s.model_dump() for s in suppliers],
+                "count": len(suppliers)
+            }
+        }
+    
+    async def workflow_trending_suppliers(
+        self,
+        job_id: str,
+        query: str,
+        user_id: str,
+        params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Workflow: Find trending products AND suppliers (Full pipeline)"""
+        logger.info(f"[{job_id}] Executing: Trending + Suppliers (Full Pipeline)")
+        
+        # Step 1: Find trends
+        self._update_job_status(job_id, JobStatus.ANALYZING, 10, "Analyzing trends...")
+        
+        category = params.get("product_category") or params.get("product_name") or query
+        
+        trends = await self.trend_analyst.analyze_trends(
+            query=category,
+            region=params.get("region", "global"),
+            limit=3
+        )
+        
+        if not trends:
+            return {
+                "job_id": job_id,
+                "status": "completed",
+                "message": "No trending products found",
+                "results": {"trending_products": [], "suppliers": []}
+            }
+        
+        # Step 2: Find suppliers for top trending product
+        self._update_job_status(job_id, JobStatus.SEARCHING_SUPPLIERS, 40, "Finding suppliers...")
+        
+        top_product = trends[0]
+        suppliers = await self.supplier_scout.find_suppliers(
+            product_name=top_product.name,
+            location=params.get("location"),
+            min_rating=params.get("min_rating", 4.0),
+            limit=params.get("limit", 5)
+        )
+        
+        # Step 3: Optional contact suppliers
+        messages = []
+        if params.get("auto_contact") and suppliers:
+            self._update_job_status(job_id, JobStatus.CONTACTING, 70, "Contacting suppliers...")
+            
+            messages = await self.outreach_agent.contact_suppliers(
+                product_name=top_product.name,
+                quantity=params.get("quantity", 20),
+                suppliers=suppliers[:5]
+            )
+        
+        # Step 4: Generate report
+        self._update_job_status(job_id, JobStatus.COMPLETED, 100, "Workflow complete!")
+        
+        report = {
+            "job_id": job_id,
+            "status": "completed",
+            "intent": "find_trending_suppliers",
+            "query": query,
+            "results": {
+                "trending_products": [p.model_dump() for p in trends],
+                "top_product": top_product.model_dump(),
+                "suppliers": [s.model_dump() for s in suppliers],
+                "outreach_messages": [m.model_dump() for m in messages] if messages else [],
+                "summary": self._generate_summary(trends, suppliers, messages)
+            }
+        }
+        
+        return report
+    
+    async def workflow_contact_suppliers(
+        self,
+        job_id: str,
+        user_id: str,
+        params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Workflow: Contact previously found suppliers"""
+        logger.info(f"[{job_id}] Executing: Contact Suppliers")
+        
+        # Get last search results from memory
+        history = await self.memory_keeper.get_history(user_id, limit=1)
+        
+        if not history or not history[0].get("suppliers"):
+            return {
+                "job_id": job_id,
+                "status": "completed",
+                "message": "No previous suppliers found. Please search for suppliers first."
+            }
+        
+        # Contact suppliers
+        suppliers_data = history[0]["suppliers"]
+        suppliers = [Supplier(**s) for s in suppliers_data[:5]]
+        
+        messages = await self.outreach_agent.contact_suppliers(
+            product_name=params.get("product", "Product"),
+            quantity=params.get("quantity", 20),
+            suppliers=suppliers
+        )
+        
+        return {
+            "job_id": job_id,
+            "status": "completed",
+            "intent": "contact_suppliers",
+            "results": {
+                "suppliers_contacted": len(suppliers),
+                "messages": [m.model_dump() for m in messages]
+            }
+        }
+    
+    async def workflow_get_status(
+        self,
+        job_id: str,
+        user_id: str,
+        params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Workflow: Get status of previous job"""
+        history = await self.memory_keeper.get_history(user_id, limit=1)
+        
+        if not history:
+            return {
+                "job_id": job_id,
+                "status": "completed",
+                "message": "No previous jobs found"
+            }
+        
+        return {
+            "job_id": job_id,
+            "status": "completed",
+            "results": history[0]
+        }
+    
+    def _generate_summary(
+        self,
+        trends: List[TrendingProduct],
+        suppliers: List[Supplier],
+        messages: List[Any]
+    ) -> str:
+        """Generate human-readable summary"""
+        summary = f"Found {len(trends)} trending products. "
+        
+        if trends:
+            summary += f"Top trending: {trends[0].name} ({trends[0].trend_score:.1f} trend score). "
+        
+        summary += f"Located {len(suppliers)} suppliers in Indonesia. "
+        
+        if messages:
+            summary += f"Contacted {len(messages)} suppliers via WhatsApp/Email."
+        
+        return summary
+    
     async def execute_full_workflow(
         self,
         query: str,

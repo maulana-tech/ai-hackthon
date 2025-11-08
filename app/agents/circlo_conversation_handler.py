@@ -10,7 +10,22 @@ from app.integrations.getcirclo_client import GetCircloClient
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-openai_client = AsyncOpenAI(api_key=settings.openai_api_key)
+# Configure LLM client based on provider
+if settings.llm_provider == "openrouter" and settings.openrouter_api_key:
+    logger.info(f"CircloHandler: Using OpenRouter with model: {settings.llm_model}")
+    llm_client = AsyncOpenAI(
+        api_key=settings.openrouter_api_key,
+        base_url="https://openrouter.ai/api/v1"
+    )
+    llm_model = settings.llm_model
+elif settings.openai_api_key:
+    logger.info("CircloHandler: Using OpenAI")
+    llm_client = AsyncOpenAI(api_key=settings.openai_api_key)
+    llm_model = "gpt-3.5-turbo"
+else:
+    logger.warning("CircloHandler: No LLM API key configured")
+    llm_client = None
+    llm_model = None
 
 class CircloConversationHandler:
     """
@@ -123,8 +138,8 @@ Respond with only the category name."""
                 {"role": "user", "content": f"Message: {message}"}
             ]
             
-            response = await openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",
+            response = await llm_client.chat.completions.create(
+                model=llm_model,
                 messages=messages,
                 temperature=0.3,
                 max_tokens=50
@@ -332,8 +347,8 @@ Respond in Indonesian (Bahasa Indonesia)."""
             # Add current message
             messages.append({"role": "user", "content": message})
             
-            response = await openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",
+            response = await llm_client.chat.completions.create(
+                model=llm_model,
                 messages=messages,
                 temperature=0.7,
                 max_tokens=300
@@ -348,8 +363,8 @@ Respond in Indonesian (Bahasa Indonesia)."""
     async def _extract_product_category(self, message: str) -> str:
         """Extract product category from message"""
         try:
-            response = await openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",
+            response = await llm_client.chat.completions.create(
+                model=llm_model,
                 messages=[
                     {"role": "system", "content": "Extract the product category from the user's message. Respond with only the category name in 1-3 words."},
                     {"role": "user", "content": message}
