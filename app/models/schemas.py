@@ -24,6 +24,14 @@ class TrendingProduct(BaseModel):
     image_url: Optional[str] = None
     price_range: Optional[str] = None
     keywords: List[str] = []
+    # Extended fields for bestseller analysis
+    rating: Optional[float] = None
+    total_sold: Optional[int] = None
+    review_count: Optional[int] = None
+    shop_name: Optional[str] = None
+    shop_location: Optional[str] = None
+    product_url: Optional[str] = None
+    is_official: bool = False
     
 class Supplier(BaseModel):
     name: str
@@ -39,9 +47,13 @@ class Supplier(BaseModel):
     url: str
     phone: Optional[str] = None
     email: Optional[str] = None
+    whatsapp: Optional[str] = None
     marketplace: str
     response_rate: Optional[float] = None
     verified: bool = False
+    is_bestseller: bool = False
+    total_sold: Optional[int] = None
+    review_count: Optional[int] = None
     
 class OutreachMessage(BaseModel):
     supplier_id: str

@@ -2,6 +2,18 @@
 
 > **Super AI-Agent** yang menghubungkan analisis tren global dengan supplier Indonesia secara otomatis menggunakan Firecrawl API dan GetCirclo Platform.
 
+---
+
+## 📖 Documentation
+
+- **📚 Documentation Index**: [docs/INDEX.md](docs/INDEX.md) - **Semua dokumentasi terorganisir**
+- **⚡ Quick Start**: [QUICKSTART.md](QUICKSTART.md) - Setup dalam 5 menit
+- **🐛 Troubleshooting**: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) - Solusi 30+ error
+- **🔥 Bestseller Feature**: [docs/BESTSELLER_FINDER_FEATURE.md](docs/BESTSELLER_FINDER_FEATURE.md) - Product discovery
+- **📝 Recent Updates**: [docs/UPDATES_SUMMARY_NOV_2025.md](docs/UPDATES_SUMMARY_NOV_2025.md) - November changelog
+
+---
+
 ## 🎯 Features
 
 ### Part A - Core AI-Agent System
@@ -270,19 +282,121 @@ uv run pytest --cov=app tests/
 
 ## 🐛 Troubleshooting
 
-### Error: "Firecrawl API key not found"
-- Pastikan `FIRECRAWL_API_KEY` ada di `.env`
-- Get API key dari: https://firecrawl.dev
+### ⚠️ Masalah Umum & Solusi Cepat
 
-### Error: "No module named 'firecrawl'"
+#### 1. Error `ModuleNotFoundError: No module named 'XXX'`
+
+**Penyebab:** Dependencies belum terinstall atau virtual environment tidak aktif
+
+**Solusi:**
 ```bash
-uv pip install firecrawl-py
+# Pastikan virtual environment aktif
+source .venv/bin/activate  # macOS/Linux
+.venv\Scripts\activate     # Windows
+
+# Install dependencies
+pip install -r requirements.txt
+# Atau gunakan UV (lebih cepat):
+uv pip install -e .
 ```
 
-### Error: "Marketplace scraping failed"
-- Firecrawl mungkin diblokir oleh marketplace
-- Gunakan fallback API (Lazada via RapidAPI)
-- Enable retry logic di config
+#### 2. Error `python: command not found` atau `pip: command not found`
+
+**Penyebab:** Python tidak terinstall atau tidak ada di PATH
+
+**Solusi:**
+```bash
+# Check Python version
+python3 --version
+
+# Jika tidak ada, install Python:
+# macOS: brew install python@3.9
+# Ubuntu: sudo apt-get install python3.9 python3-pip
+# Windows: Download dari https://www.python.org/downloads/
+```
+
+#### 3. Error `FIRECRAWL_API_KEY not found`
+
+**Penyebab:** File `.env` tidak ada atau tidak ter-load
+
+**Solusi:**
+```bash
+# 1. Copy template .env
+cp .env.example .env
+
+# 2. Edit dan isi API keys
+nano .env  # atau gunakan text editor favorit
+
+# 3. Verify API key loaded
+python -c "from app.config import get_settings; print(get_settings().firecrawl_api_key)"
+```
+
+Get API keys:
+- Firecrawl: https://www.firecrawl.dev/app/api-keys
+- OpenAI: https://platform.openai.com/api-keys
+
+#### 4. Error `Address already in use` (port 8000)
+
+**Penyebab:** Port sudah digunakan process lain
+
+**Solusi:**
+```bash
+# Cari process yang menggunakan port 8000
+lsof -i :8000  # macOS/Linux
+netstat -ano | findstr :8000  # Windows
+
+# Kill process
+kill -9 <PID>
+
+# Atau gunakan port lain
+uvicorn app.main:app --port 8001
+```
+
+#### 5. Error `tests/test_xxx.py` timeout
+
+**Penyebab:** Scraping terlalu lama atau API rate limit
+
+**Solusi:**
+```bash
+# Skip slow tests
+pytest -m "not slow"
+
+# Run specific test
+pytest tests/test_bestseller_finder.py::test_intent_classification
+
+# Increase timeout (add to test file)
+@pytest.mark.asyncio
+async def test_something():
+    await asyncio.wait_for(some_function(), timeout=120)
+```
+
+#### 6. Error `Firecrawl API returned status 402`
+
+**Penyebab:** Firecrawl credit habis atau API key invalid
+
+**Solusi:**
+```bash
+# 1. Check credit di https://www.firecrawl.dev/app
+# 2. Verify API key
+# 3. Test API directly:
+curl -X POST https://api.firecrawl.dev/v1/scrape \
+  -H "Authorization: Bearer fc-YOUR-KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://www.tokopedia.com"}'
+```
+
+### 📖 Dokumentasi Lengkap
+
+Untuk troubleshooting lengkap, lihat **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** yang mencakup:
+
+- ✅ Masalah instalasi dependencies (pip, uv, SSL, build tools)
+- ✅ Masalah Python & virtual environment
+- ✅ Masalah API keys & configuration
+- ✅ Masalah saat running scripts
+- ✅ Masalah database & memory
+- ✅ Masalah scraping & API rate limits
+- ✅ Debug mode & logging
+- ✅ Useful commands cheat sheet
 
 ## 🌟 Advanced Features
 

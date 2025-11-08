@@ -13,7 +13,10 @@ class Settings(BaseSettings):
     getcirclo_whatsapp_enabled: bool = True
     getcirclo_memory_enabled: bool = True
     
-    openai_api_key: str
+    openai_api_key: str = ""
+    openrouter_api_key: str = ""
+    llm_provider: str = "openrouter"  # "openai" or "openrouter"
+    llm_model: str = "qwen/qwen-2.5-coder-32b-instruct"
     
     rapidapi_key: str
     lazada_api_host: str = "lazada-api.p.rapidapi.com"

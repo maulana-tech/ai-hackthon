@@ -41,7 +41,7 @@ class FirecrawlClient:
                 }]
                 
             logger.info(f"Scraping URL: {url}")
-            result = self.client.scrape(url, **scrape_options)
+            result = self.client.scrape_url(url, params=scrape_options)
             
             return result
             
@@ -71,7 +71,7 @@ class FirecrawlClient:
                 crawl_options["excludePaths"] = exclude_paths
                 
             logger.info(f"Crawling URL: {url} with limit: {limit}")
-            result = self.client.crawl(url, **crawl_options)
+            result = self.client.crawl_url(url, params=crawl_options)
             
             return result
             
@@ -94,8 +94,10 @@ class FirecrawlClient:
             logger.info(f"Searching: {query} with limit: {limit}")
             result = self.client.search(
                 query,
-                limit=limit,
-                scrape_options={"formats": formats}
+                params={
+                    "limit": limit,
+                    "scrapeOptions": {"formats": formats}
+                }
             )
             
             return result

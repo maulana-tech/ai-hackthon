@@ -131,34 +131,188 @@ class SupplierScoutAgent:
             
             search_url = f"https://www.indonetwork.co.id/search?q={product_name.replace(' ', '+')}"
             
-            actions = [
-                {"type": "wait", "milliseconds": 3000},
-                {"type": "scroll", "y": 1500},
-                {"type": "wait", "milliseconds": 1500}
-            ]
-            
-            result = await self.firecrawl.scrape_with_actions(
+            # First, get search results page
+            result = await self.firecrawl.scrape(
                 search_url,
-                actions=actions,
-                formats=[{
-                    "type": "json",
-                    "prompt": """Extract list of companies/suppliers with:
-                    - company_name
-                    - product_name
-                    - company_url (full URL to company page)
-                    - location/city
-                    - contact_person
-                    - phone
-                    - email
-                    - address
-                    - product_description
-                    - minimum_order_quantity"""
-                }]
+                formats=["markdown", "html"]
             )
             
+            if not result or 'linksOnPage' not in result:
+                logger.warning("No links found in search results")
+                return []
+            
+            # Extract product links
+            product_links = [
+                link for link in result.get('linksOnPage', [])
+                if '/product/' in link and 'indonetwork.co.id' in link
+            ]
+            
+            logger.info(f"Found {len(product_links)} product links")
+            
+            if not product_links:
+                return []
+            
+            # Scrape first 5 product pages for details
+            suppliers = []
+            for product_url in product_links[:5]:
+                try:
+                    logger.info(f"Scraping product: {product_url}")
+                    
+                    # Scrape individual product page with AI extraction
+                    product_result = await self.firecrawl.scrape(
+                        product_url,
+                        formats=["markdown"]
+                    )
+                    
+                    if product_result and 'markdown' in product_result:
+                        markdown = product_result['markdown']
+                        
+                        # Parse supplier info from markdown
+                        supplier = self._parse_indonetwork_product(markdown, product_url)
+                        if supplier and supplier.rating >= min_rating:
+                            suppliers.append(supplier)
+                    
+                    # Small delay between requests
+                    await asyncio.sleep(1)
+                    
+                except Exception as e:
+                    logger.error(f"Error scraping product {product_url}: {str(e)}")
+                    continue
+            
+            logger.info(f"Successfully scraped {len(suppliers)} suppliers from Indonetwork")
+            return suppliers
+            
+        except Exception as e:
+            logger.error(f"Error searching Indonetwork: {str(e)}")
+            return []
+    
+    def _parse_indonetwork_product(self, markdown: str, product_url: str) -> Optional[Supplier]:
+        """Parse Indonetwork product page markdown to extract supplier info"""
+        try:
+            import re
+            
+            # Extract company name - look for "### CV." or "### PT." pattern
+            # This is the actual company heading in the markdown
+            company_match = re.search(r'###\s+((?:CV\.|PT\.|UD\.|Toko\s)\s*[^\n]+)', markdown, re.IGNORECASE)
+            if not company_match:
+                # Alternative: look for company section link pattern
+                company_match = re.search(r'### \[([^\]]+)\]\(https://www\.indonetwork\.co\.id/company/', markdown)
+            
+            company_name = company_match.group(1).strip() if company_match else "Unknown Supplier"
+            
+            # Extract product name - look for the H1 heading (# heading)
+            product_match = re.search(r'^# (.+)$', markdown, re.MULTILINE)
+            if not product_match:
+                # Fallback: look for product in breadcrumb or title
+                product_match = re.search(r'- (Botol [^\n]+|Pot [^\n]+|\w+ [^\n]+)\n', markdown)
+            
+            product_name = product_match.group(1).strip() if product_match else "Product"
+            
+            # Extract full address - look for complete address pattern after company info
+            address_match = re.search(r'(?:Perumahan|Jalan|Jl\.|Gedung|Kompleks)\s+([^\n]+)\n([^\n]+?(?:Jakarta|Surabaya|Bandung|Semarang|Yogyakarta|Bali|Gresik|Tangerang|Bekasi|Bogor|Depok|Malang|Medan)[^\n]*)', markdown, re.IGNORECASE | re.DOTALL)
+            if address_match:
+                location = f"{address_match.group(1).strip()}, {address_match.group(2).strip()}"
+            else:
+                # Fallback to simpler pattern
+                location_match = re.search(r'([^\n]*(?:Jakarta|Surabaya|Bandung|Semarang|Yogyakarta|Bali|Gresik|Tangerang|Bekasi|Bogor|Depok|Malang|Medan)[^\n]*)', markdown, re.IGNORECASE)
+                location = location_match.group(1).strip() if location_match else "Indonesia"
+            
+            # Extract WhatsApp - look for the specific pattern "WHATSAPP : 0822-2424-9969"
+            whatsapp_match = re.search(r'(?:WHATSAPP|WhatsApp|WA)\s*[:：]\s*([\d\-\+\(\)\s]+)', markdown, re.IGNORECASE)
+            whatsapp = ""
+            if whatsapp_match:
+                # Clean up the number
+                whatsapp = whatsapp_match.group(1).strip()
+            else:
+                # Fallback 1: look for Indonesian phone number format in CONTACT section
+                contact_section = re.search(r'CONTACT[^\n]*\n([^\n]*\n){0,5}', markdown, re.IGNORECASE)
+                if contact_section:
+                    contact_text = contact_section.group(0)
+                    whatsapp_match = re.search(r'(0\d{3,4}[\s\-]?\d{3,4}[\s\-]?\d{3,4})', contact_text)
+                    if whatsapp_match:
+                        whatsapp = whatsapp_match.group(1).strip()
+                
+                # Fallback 2: look anywhere in markdown for Indonesian phone
+                if not whatsapp:
+                    # Look for pattern near phone-related keywords
+                    phone_context = re.search(r'(?:hubungi|contact|telp|hp|call|phone)[^\n]{0,30}(0\d{3,4}[\s\-]?\d{3,4}[\s\-]?\d{3,4})', markdown, re.IGNORECASE)
+                    if phone_context:
+                        whatsapp = phone_context.group(1).strip()
+            
+            # Extract phone (same logic as WhatsApp for now)
+            phone_match = re.search(r'(?:TELEPON|Telp|Phone|HP)\s*[:：]\s*([\d\-\+\(\)\s]+)', markdown, re.IGNORECASE)
+            phone = ""
+            if phone_match:
+                phone = phone_match.group(1).strip()
+            else:
+                # Use WhatsApp as fallback
+                phone = whatsapp
+            
+            # Extract email (comprehensive pattern)
+            email_match = re.search(r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', markdown)
+            email = email_match.group(1).strip() if email_match else ""
+            
+            # Extract price (Rp, IDR)
+            price_match = re.search(r'(?:Rp|IDR)[.\s]*([0-9.,]+)', markdown, re.IGNORECASE)
+            price = 0
+            if price_match:
+                price_str = price_match.group(1).replace('.', '').replace(',', '')
+                try:
+                    price = int(price_str)
+                except:
+                    price = 0
+            
+            # Extract MOQ - look for "Minimum Pembelian" section
+            moq_match = re.search(r'Minimum Pembelian\s*\n\s*(\d+)', markdown, re.IGNORECASE)
+            if not moq_match:
+                moq_match = re.search(r'(?:MOQ|Minimum Order|Min\. Order)[:\s]*([0-9]+)', markdown, re.IGNORECASE)
+            moq = int(moq_match.group(1)) if moq_match else 1
+            
+            # Extract city from location - prioritize major cities
+            major_cities = ['Jakarta', 'Surabaya', 'Bandung', 'Semarang', 'Yogyakarta', 'Bali', 'Gresik', 'Tangerang', 'Bekasi', 'Bogor', 'Depok', 'Malang', 'Medan']
+            city = "Indonesia"
+            for c in major_cities:
+                if c.lower() in location.lower():
+                    city = c
+                    break
+            
+            # Create supplier object
+            supplier = Supplier(
+                name=company_name,
+                store_name=company_name,
+                marketplace="Indonetwork",
+                location=location,
+                city=city,
+                rating=4.5,  # Default rating for Indonetwork (B2B verified)
+                product_name=product_name,
+                price=price,
+                currency="IDR",
+                minimum_order=moq,
+                stock_available=True,
+                phone=phone,
+                email=email,
+                whatsapp=whatsapp,
+                url=product_url,
+                verified=True,
+                response_rate=85.0,
+                is_bestseller=True,  # B2B suppliers are typically reliable
+                total_sold=None,
+                review_count=None
+            )
+            
+            logger.info(f"Parsed supplier: {company_name} - {product_name}")
+            return supplier
+            
+        except Exception as e:
+            logger.error(f"Error parsing Indonetwork product: {str(e)}")
+            return None
+    
+    async def _OLD_search_indonetwork_DEPRECATED(self, product_name: str, min_rating: float) -> List[Supplier]:
+        """OLD METHOD - DEPRECATED - kept for reference only"""
+        try:
             suppliers = []
             
-            if result and 'data' in result:
+            if False and result and 'data' in result:
                 data = result['data']
                 if 'json' in data:
                     json_data = data['json']
@@ -274,11 +428,12 @@ class SupplierScoutAgent:
         return companies
     
     async def _search_tokopedia(self, product_name: str, min_rating: float) -> List[Supplier]:
-        """Search Tokopedia for suppliers"""
+        """Search Tokopedia for suppliers (BESTSELLERS ONLY)"""
         try:
             logger.info(f"Searching Tokopedia for: {product_name}")
             
-            search_url = f"https://www.tokopedia.com/search?q={product_name.replace(' ', '%20')}"
+            # Add sort by bestseller parameter
+            search_url = f"https://www.tokopedia.com/search?q={product_name.replace(' ', '%20')}&ob=5"
             
             actions = [
                 {"type": "wait", "milliseconds": 2000},
@@ -291,7 +446,20 @@ class SupplierScoutAgent:
                 actions=actions,
                 formats=[{
                     "type": "json",
-                    "prompt": "Extract: store name, product name, price, rating, location, stock status, seller info"
+                    "prompt": """Extract ONLY from top/bestselling products (highest sold):
+                    - store name
+                    - seller name
+                    - product name
+                    - price
+                    - rating
+                    - location
+                    - stock status
+                    - total sold (terjual)
+                    - review count
+                    - seller phone/whatsapp (if visible)
+                    - seller email (if visible)
+                    - is bestseller badge present
+                    Focus on products with highest sales numbers."""
                 }]
             )
             
@@ -314,6 +482,15 @@ class SupplierScoutAgent:
                         if rating >= min_rating:
                             price_str = str(item.get('price', '0'))
                             price = float(re.sub(r'[^\d.]', '', price_str.replace('Rp', '').replace('.', '').replace(',', '.')))
+                            
+                            # Extract contact information
+                            phone = item.get('phone', item.get('whatsapp', ''))
+                            email = item.get('email', '')
+                            
+                            # Extract sales metrics
+                            total_sold = item.get('total_sold', item.get('sold', item.get('terjual', 0)))
+                            if isinstance(total_sold, str):
+                                total_sold = int(re.sub(r'[^\d]', '', total_sold)) if total_sold else 0
                             
                             supplier = Supplier(
                                 name=item.get('seller_name', item.get('store_name', 'Tokopedia Seller')),
@@ -327,9 +504,15 @@ class SupplierScoutAgent:
                                 stock_available=item.get('stock', 'available').lower() != 'habis',
                                 minimum_order=int(item.get('min_order', 1)),
                                 url=item.get('url', search_url),
+                                phone=phone,
+                                email=email,
+                                whatsapp=item.get('whatsapp', phone),
                                 marketplace="Tokopedia",
                                 verified=item.get('verified', False),
-                                response_rate=item.get('response_rate', 85.0)
+                                response_rate=item.get('response_rate', 85.0),
+                                is_bestseller=item.get('is_bestseller', False) or total_sold > 100,
+                                total_sold=total_sold,
+                                review_count=item.get('review_count', 0)
                             )
                             suppliers.append(supplier)
                             
@@ -340,11 +523,12 @@ class SupplierScoutAgent:
             return []
             
     async def _search_shopee(self, product_name: str, min_rating: float) -> List[Supplier]:
-        """Search Shopee for suppliers"""
+        """Search Shopee for suppliers (BESTSELLERS ONLY)"""
         try:
             logger.info(f"Searching Shopee for: {product_name}")
             
-            search_url = f"https://shopee.co.id/search?keyword={product_name.replace(' ', '%20')}"
+            # Add sort by sales parameter (sortBy=sales)
+            search_url = f"https://shopee.co.id/search?keyword={product_name.replace(' ', '%20')}&sortBy=sales"
             
             actions = [
                 {"type": "wait", "milliseconds": 2500},
@@ -357,7 +541,21 @@ class SupplierScoutAgent:
                 actions=actions,
                 formats=[{
                     "type": "json",
-                    "prompt": "Extract: shop name, product name, price, rating, location, stock, minimum order"
+                    "prompt": """Extract ONLY from top-selling products (sorted by sales):
+                    - shop name
+                    - seller name
+                    - product name
+                    - price
+                    - rating
+                    - location/city
+                    - stock status
+                    - total sold (terjual)
+                    - review count
+                    - minimum order
+                    - shop phone/whatsapp (if visible)
+                    - shop email (if visible)
+                    - is official shop or mall badge
+                    Focus on products with highest sold count."""
                 }]
             )
             
@@ -381,21 +579,36 @@ class SupplierScoutAgent:
                             price_str = str(item.get('price', '0'))
                             price = float(re.sub(r'[^\d.]', '', price_str.replace('Rp', '').replace('.', '').replace(',', '.')))
                             
+                            # Extract contact information
+                            phone = item.get('phone', item.get('shop_phone', item.get('whatsapp', '')))
+                            email = item.get('email', item.get('shop_email', ''))
+                            
+                            # Extract sales metrics
+                            total_sold = item.get('total_sold', item.get('sold', item.get('terjual', 0)))
+                            if isinstance(total_sold, str):
+                                total_sold = int(re.sub(r'[^\d]', '', total_sold)) if total_sold else 0
+                            
                             supplier = Supplier(
                                 name=item.get('shop_name', 'Shopee Seller'),
                                 store_name=item.get('shop_name', 'Unknown Store'),
                                 rating=rating,
-                                location=item.get('shop_location', 'Indonesia'),
-                                city=item.get('city', self._extract_city(item.get('shop_location', ''))),
-                                product_name=item.get('name', product_name),
+                                location=item.get('shop_location', item.get('location', 'Indonesia')),
+                                city=item.get('city', self._extract_city(item.get('shop_location', item.get('location', '')))),
+                                product_name=item.get('name', item.get('product_name', product_name)),
                                 price=price,
                                 currency="IDR",
                                 stock_available=int(item.get('stock', 10)) > 0,
                                 minimum_order=int(item.get('min_order', 1)),
                                 url=item.get('url', search_url),
+                                phone=phone,
+                                email=email,
+                                whatsapp=item.get('whatsapp', phone),
                                 marketplace="Shopee",
-                                verified=item.get('is_official_shop', False),
-                                response_rate=item.get('response_rate', 90.0)
+                                verified=item.get('is_official_shop', item.get('is_mall', False)),
+                                response_rate=item.get('response_rate', 90.0),
+                                is_bestseller=item.get('is_official_shop', False) or total_sold > 100,
+                                total_sold=total_sold,
+                                review_count=item.get('review_count', 0)
                             )
                             suppliers.append(supplier)
                             
@@ -462,18 +675,35 @@ class SupplierScoutAgent:
             return []
             
     def _rank_and_filter(self, suppliers: List[Supplier], limit: int) -> List[Supplier]:
-        """Rank suppliers by rating and response rate"""
+        """Rank suppliers by bestseller status, sales, rating, and response rate"""
         
         for supplier in suppliers:
+            # Calculate comprehensive score
+            # Prioritize: bestsellers > sales volume > rating > response rate
+            bestseller_score = 100 if supplier.is_bestseller else 0
+            sales_score = min((supplier.total_sold or 0) / 10, 100)  # Normalize to 100 max
+            rating_score = supplier.rating * 20  # Scale to 100
+            response_score = (supplier.response_rate or 0)
+            verified_score = 50 if supplier.verified else 0
+            
             supplier_score = (
-                supplier.rating * 0.6 +
-                (supplier.response_rate or 0) / 100 * 0.3 +
-                (0.1 if supplier.verified else 0) * 10
+                bestseller_score * 0.3 +      # 30% weight on bestseller status
+                sales_score * 0.25 +          # 25% weight on sales volume
+                rating_score * 0.25 +         # 25% weight on rating
+                response_score * 0.15 +       # 15% weight on response rate
+                verified_score * 0.05         # 5% weight on verification
             )
             
+        # Sort by multiple criteria: bestseller > total_sold > rating
         sorted_suppliers = sorted(
             suppliers,
-            key=lambda x: (x.rating, x.response_rate or 0),
+            key=lambda x: (
+                x.is_bestseller,
+                x.total_sold or 0,
+                x.rating,
+                x.response_rate or 0,
+                x.verified
+            ),
             reverse=True
         )
         
@@ -565,31 +795,65 @@ class SupplierScoutAgent:
             return {}
     
     async def generate_search_summary(self, suppliers: List[Supplier]) -> str:
-        """Generate a summary of supplier search"""
+        """Generate a summary of supplier search with contact info and bestseller status"""
         if not suppliers:
             return "No suppliers found for your query."
             
-        summary = f"Found {len(suppliers)} verified suppliers:\n\n"
+        summary = f"Found {len(suppliers)} verified suppliers (sorted by bestsellers):\n\n"
         
         for i, supplier in enumerate(suppliers, 1):
-            summary += f"{i}. **{supplier.store_name}** ({supplier.marketplace})\n"
+            # Add bestseller badge
+            badge = "🔥 BESTSELLER" if supplier.is_bestseller else ""
+            summary += f"{i}. **{supplier.store_name}** ({supplier.marketplace}) {badge}\n"
+            summary += f"   - Product: {supplier.product_name}\n"
             summary += f"   - Location: {supplier.city}\n"
             
-            if supplier.marketplace == "Indonetwork":
-                if supplier.phone:
-                    summary += f"   - Phone: {supplier.phone}\n"
-                if supplier.email:
-                    summary += f"   - Email: {supplier.email}\n"
-            else:
-                summary += f"   - Rating: {supplier.rating}/5.0\n"
+            # Show rating and sales metrics
+            if supplier.marketplace != "Indonetwork":
+                summary += f"   - Rating: {supplier.rating}/5.0"
+                if supplier.review_count:
+                    summary += f" ({supplier.review_count} reviews)"
+                summary += "\n"
+                
+                if supplier.total_sold:
+                    summary += f"   - Total Sold: {supplier.total_sold:,} pcs\n"
+                
                 summary += f"   - Price: Rp {supplier.price:,.0f}\n"
             
+            # Contact information (PRIORITY)
+            contact_added = False
+            if supplier.phone:
+                summary += f"   - 📞 Phone: {supplier.phone}\n"
+                contact_added = True
+            if supplier.whatsapp and supplier.whatsapp != supplier.phone:
+                summary += f"   - 💬 WhatsApp: {supplier.whatsapp}\n"
+                contact_added = True
+            if supplier.email:
+                summary += f"   - 📧 Email: {supplier.email}\n"
+                contact_added = True
+            
+            if not contact_added:
+                summary += f"   - ℹ️ Contact: Available on marketplace page\n"
+            
+            # Additional info
             summary += f"   - Min Order: {supplier.minimum_order} pcs\n"
-            summary += f"   - Stock: {'✓ Available' if supplier.stock_available else '✗ Out of Stock'}\n"
+            summary += f"   - Stock: {'✅ Available' if supplier.stock_available else '❌ Out of Stock'}\n"
+            
+            if supplier.verified:
+                summary += f"   - ✅ Verified Seller\n"
             
             if supplier.url:
-                summary += f"   - URL: {supplier.url}\n"
+                summary += f"   - 🔗 Link: {supplier.url}\n"
             
             summary += "\n"
+        
+        # Add summary stats
+        bestseller_count = sum(1 for s in suppliers if s.is_bestseller)
+        with_contact = sum(1 for s in suppliers if s.phone or s.email)
+        
+        summary += f"\n📊 Summary:\n"
+        summary += f"- {bestseller_count}/{len(suppliers)} are bestsellers\n"
+        summary += f"- {with_contact}/{len(suppliers)} have contact information\n"
+        summary += f"- Average rating: {sum(s.rating for s in suppliers) / len(suppliers):.1f}/5.0\n"
             
         return summary
