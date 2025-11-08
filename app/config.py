@@ -7,6 +7,9 @@ class Settings(BaseSettings):
     debug: bool = True
     log_level: str = "INFO"
     
+    # Base URL for document links (set to your deployed URL)
+    app_base_url: str = "http://localhost:8000"  # Change to GetCirclo webhook URL in production
+    
     firecrawl_api_key: str
     getcirclo_api_key: str
     getcirclo_jwt_token: str = ""
@@ -15,8 +18,9 @@ class Settings(BaseSettings):
     
     openai_api_key: str = ""
     openrouter_api_key: str = ""
-    llm_provider: str = "openrouter"  # "openai" or "openrouter"
-    llm_model: str = "qwen/qwen-2.5-coder-32b-instruct"
+    gemini_api_key: str = ""
+    llm_provider: str = "gemini"  # "openai", "openrouter", or "gemini"
+    llm_model: str = "qwen/qwq-32b-preview"  # Qwen 3 model
     
     rapidapi_key: str
     lazada_api_host: str = "lazada-api.p.rapidapi.com"
