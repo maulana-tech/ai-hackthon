@@ -14,6 +14,10 @@
 
 ---
 
+## Link PPT
+- https://docs.google.com/presentation/d/1EH7mG35dUfgBXstGPE9NejsnzyIDCGE2Dy0CBxcDOLE/edit?usp=sharing
+
+
 ## 🎯 Features
 
 ### Part A - Core AI-Agent System

@@ -36,19 +36,19 @@ class TrendingProduct(BaseModel):
 class Supplier(BaseModel):
     name: str
     store_name: str
-    rating: float
-    location: str
-    city: str
-    product_name: str
-    price: float
+    rating: float = 4.0
+    location: str = "Indonesia"
+    city: Optional[str] = None
+    product_name: str = "Unknown Product"
+    price: float = 0
     currency: str = "IDR"
-    stock_available: bool
-    minimum_order: int
-    url: str
+    stock_available: bool = True
+    minimum_order: int = 1
+    url: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
     whatsapp: Optional[str] = None
-    marketplace: str
+    marketplace: str = "Unknown"
     response_rate: Optional[float] = None
     verified: bool = False
     is_bestseller: bool = False

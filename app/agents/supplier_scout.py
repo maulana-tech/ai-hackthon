@@ -3,6 +3,8 @@ import logging
 from typing import List, Dict, Any, Optional
 import re
 import httpx
+import json
+from pathlib import Path
 
 from app.models.schemas import Supplier
 from app.integrations.firecrawl_client import FirecrawlClient
@@ -32,29 +34,32 @@ class SupplierScoutAgent:
         """
         Main method to find suppliers from multiple marketplaces
         
+        Priority:
+        1. Load from sample_shopee_data.json (instant, no API calls)
+        2. If not found, load from data/suppliers/ folder
+        
         Args:
             product_name: Product to search
             location: Optional location filter
             min_rating: Minimum supplier rating
             limit: Maximum suppliers to return
-            use_apify: Use Apify (faster) or Firecrawl (more flexible)
+            use_apify: Ignored (kept for backward compatibility)
             
         Returns:
             List of ranked suppliers
         """
-        logger.info(f"Starting supplier search for: {product_name}")
+        logger.info(f"Loading supplier data for: {product_name}")
         
-        # Determine which scraping method to use
-        use_apify_flag = use_apify if use_apify is not None else self.use_apify
+        all_suppliers = []
         
-        if use_apify_flag:
-            # Use Apify for faster, more reliable scraping
-            logger.info("Using Apify for marketplace scraping")
-            all_suppliers = await self._search_with_apify(product_name, min_rating, limit)
-        else:
-            # Use Firecrawl for custom sites
-            logger.info("Using Firecrawl for marketplace scraping")
-            all_suppliers = await self._search_with_firecrawl(product_name, min_rating)
+        # PRIORITY 1: Load from sample_shopee_data.json (instant, no scraping)
+        logger.info("📂 Loading suppliers from sample_shopee_data.json...")
+        all_suppliers = await self._load_sample_shopee_data(product_name, min_rating, limit)
+        
+        # PRIORITY 2: If not found, load from data/suppliers/ folder
+        if not all_suppliers or len(all_suppliers) == 0:
+            logger.info(f"No suppliers in sample data, trying data/suppliers/ folder...")
+            all_suppliers = await self._load_fallback_supplier_data(product_name, min_rating, limit)
         
         # Filter by location if specified
         if location:
@@ -63,6 +68,7 @@ class SupplierScoutAgent:
         # Rank and filter
         ranked_suppliers = self._rank_and_filter(all_suppliers, limit)
         
+        logger.info(f"✅ Returning {len(ranked_suppliers)} suppliers for {product_name}")
         return ranked_suppliers
     
     async def _search_with_apify(
@@ -674,6 +680,177 @@ class SupplierScoutAgent:
             logger.error(f"Error searching Lazada: {str(e)}")
             return []
             
+    async def _load_sample_shopee_data(
+        self,
+        product_name: str,
+        min_rating: float,
+        limit: int
+    ) -> List[Supplier]:
+        """
+        Load supplier data from data/sample_shopee_data.json
+        
+        This file contains pre-scraped Shopee supplier data with email contacts.
+        """
+        try:
+            logger.info(f"Loading from sample_shopee_data.json for: {product_name}")
+            
+            sample_file = Path("data/sample_shopee_data.json")
+            if not sample_file.exists():
+                logger.warning(f"sample_shopee_data.json not found")
+                return []
+            
+            # Load JSON
+            with open(sample_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            if not isinstance(data, list):
+                logger.warning("sample_shopee_data.json is not an array")
+                return []
+            
+            logger.info(f"Found {len(data)} suppliers in sample data")
+            
+            suppliers = []
+            product_lower = product_name.lower()
+            
+            # Parse each supplier
+            for item in data:
+                try:
+                    # Check if product matches (search in title, description, keyword)
+                    title = item.get('title', '').lower()
+                    description = item.get('description', '').lower()
+                    keyword = item.get('keyword', '').lower()
+                    
+                    # Simple keyword matching
+                    if not any(word in title or word in description or word in keyword 
+                              for word in product_lower.split()):
+                        continue
+                    
+                    # Create Supplier object
+                    supplier = Supplier(
+                        name=item.get('title', 'Unknown'),
+                        store_name=item.get('title', 'Unknown'),
+                        rating=4.5,  # Default good rating for suppliers with email
+                        location='Indonesia',
+                        city='Indonesia',
+                        product_name=item.get('title', product_name),
+                        price=100000,  # Default reasonable price
+                        currency='IDR',
+                        stock_available=True,
+                        minimum_order=1,
+                        url=item.get('url', ''),
+                        phone='',
+                        email=item.get('email', ''),
+                        whatsapp='',
+                        marketplace='Shopee',
+                        response_rate=85.0,
+                        verified=True
+                    )
+                    
+                    # Filter by rating
+                    if supplier.rating >= min_rating:
+                        suppliers.append(supplier)
+                    
+                    # Stop if we have enough
+                    if len(suppliers) >= limit * 2:
+                        break
+                        
+                except Exception as e:
+                    logger.warning(f"Error parsing supplier: {str(e)}")
+                    continue
+            
+            logger.info(f"✅ Loaded {len(suppliers)} matching suppliers from sample data")
+            return suppliers[:limit * 2]  # Return extra for ranking
+            
+        except Exception as e:
+            logger.error(f"Error loading sample_shopee_data.json: {str(e)}")
+            return []
+    
+    async def _load_fallback_supplier_data(
+        self,
+        product_name: str,
+        min_rating: float,
+        limit: int
+    ) -> List[Supplier]:
+        """
+        Load pre-scraped supplier data from data/suppliers/ folder
+        
+        This is used as fallback when Apify/Firecrawl scraping fails or is rate limited.
+        """
+        try:
+            logger.info(f"Loading fallback supplier data for: {product_name}")
+            
+            data_folder = Path("data/suppliers")
+            if not data_folder.exists():
+                logger.warning(f"Supplier data folder does not exist: {data_folder}")
+                return []
+            
+            suppliers = []
+            
+            # Normalize product name for matching
+            product_lower = product_name.lower()
+            
+            # Read all JSON files in data/suppliers/
+            for json_file in data_folder.glob("*.json"):
+                try:
+                    with open(json_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    
+                    # Check if this file matches the product
+                    file_product = data.get('product', '').lower()
+                    
+                    # Match if product name is in filename or in data
+                    if product_lower in json_file.stem.lower() or product_lower in file_product:
+                        logger.info(f"✅ Found matching supplier data: {json_file.name}")
+                        
+                        # Parse suppliers from JSON
+                        supplier_list = data.get('suppliers', [])
+                        
+                        for supplier_data in supplier_list:
+                            try:
+                                # Create Supplier object with fallback values
+                                supplier = Supplier(
+                                    name=supplier_data.get('name', supplier_data.get('store_name', 'Unknown')),
+                                    store_name=supplier_data.get('store_name', supplier_data.get('name', 'Unknown')),
+                                    rating=float(supplier_data.get('rating', 4.5)),
+                                    location=supplier_data.get('location', 'Indonesia'),
+                                    city=supplier_data.get('city', supplier_data.get('location', '').split(',')[0] if ',' in supplier_data.get('location', '') else supplier_data.get('location', 'Indonesia')),
+                                    product_name=supplier_data.get('product_name', product_name),
+                                    price=float(supplier_data.get('price', 0)),
+                                    currency=supplier_data.get('currency', 'IDR'),
+                                    stock_available=supplier_data.get('stock_available', True),
+                                    minimum_order=int(supplier_data.get('minimum_order', 1)),
+                                    url=supplier_data.get('url', ''),
+                                    phone=supplier_data.get('phone', ''),
+                                    email=supplier_data.get('email', ''),
+                                    whatsapp=supplier_data.get('whatsapp', ''),
+                                    marketplace=supplier_data.get('marketplace', 'Indonetwork'),
+                                    response_rate=supplier_data.get('response_rate'),
+                                    verified=supplier_data.get('verified', False)
+                                )
+                                
+                                # Filter by rating
+                                if supplier.rating >= min_rating:
+                                    suppliers.append(supplier)
+                                
+                            except Exception as e:
+                                logger.warning(f"Error parsing supplier from {json_file.name}: {str(e)}")
+                                continue
+                        
+                        # If we found suppliers in this file, we can stop (unless we need more)
+                        if len(suppliers) >= limit:
+                            break
+                            
+                except Exception as e:
+                    logger.warning(f"Error reading {json_file.name}: {str(e)}")
+                    continue
+            
+            logger.info(f"✅ Loaded {len(suppliers)} suppliers from fallback data")
+            return suppliers[:limit * 2]  # Return extra for ranking
+            
+        except Exception as e:
+            logger.error(f"Error loading fallback supplier data: {str(e)}")
+            return []
+    
     def _rank_and_filter(self, suppliers: List[Supplier], limit: int) -> List[Supplier]:
         """Rank suppliers by bestseller status, sales, rating, and response rate"""
         

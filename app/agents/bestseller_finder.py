@@ -22,6 +22,12 @@ from app.integrations.firecrawl_client import FirecrawlClient
 from app.config import get_settings
 from app.utils.mock_data import get_mock_bestsellers
 from app.utils.local_scrape_data import local_scrape_data
+from app.agents.bestseller_finder_helpers import (
+    load_suppliers_from_data_folder,
+    parse_tokopedia_item
+)
+import json
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -49,9 +55,11 @@ class BestsellerFinder:
         """
         Find bestselling products across marketplaces
         
+        Supported marketplaces: tokopedia, amazon, lazada, shopee
+        
         Args:
             category: Product category (e.g., "fashion", "electronics", "beauty")
-            marketplace: Specific marketplace ("tokopedia", "shopee", "lazada") or None for all
+            marketplace: Specific marketplace ("tokopedia", "amazon", "lazada", "shopee") or None for all
             limit: Max products to return
             min_sold: Minimum units sold
             min_rating: Minimum product rating
@@ -62,18 +70,22 @@ class BestsellerFinder:
         logger.info(f"Finding bestsellers - category: {category}, marketplace: {marketplace}")
         
         # Determine which marketplaces to scrape
-        # Shopee uses fallback data (pre-scraped suppliers with emails)
         marketplaces = []
         if marketplace:
             marketplaces = [marketplace.lower()]
         else:
-            marketplaces = ["tokopedia", "lazada", "shopee"]  # Shopee with fallback data
+            # Default: Try all marketplaces with data
+            marketplaces = ["tokopedia", "amazon", "lazada", "shopee"]
         
         # Scrape all marketplaces in parallel
         tasks = []
         for mp in marketplaces:
             if mp == "tokopedia":
                 tasks.append(self._scrape_tokopedia_bestsellers(category, limit * 2))
+            elif mp == "amazon":
+                # Amazon - load from bulk JSON
+                logger.info("Loading Amazon bestsellers from bulk JSON")
+                tasks.append(self._load_from_bulk_json('amazon', category, limit * 2))
             elif mp == "lazada":
                 # Try Lazada but will auto-fallback if credits exhausted
                 logger.info("Attempting Lazada scraping (will use fallback if credits exhausted)")
@@ -102,13 +114,13 @@ class BestsellerFinder:
         # Rank by sales volume, rating, and trend score
         ranked = self._rank_products(filtered, limit)
         
-        # If no results (API rate limited), use mock data as fallback
+        # If no results from bulk JSON, log warning
         if not ranked:
-            logger.warning(
-                "⚠️  No products found from marketplaces (likely rate limited). "
-                "Using fallback demo data..."
-            )
-            ranked = get_mock_bestsellers(category=category or "elektronik", limit=limit)
+            logger.warning("⚠️ No products found in bulk JSON files. Please add data to:")
+            logger.warning(f"   - data/bulk_scraping/tokopedia_products.json")
+            logger.warning(f"   - data/bulk_scraping/amazon_products.json")
+            logger.warning(f"   - data/bulk_scraping/lazada_products.json")
+            logger.warning(f"   - data/bulk_scraping/shopee_products.json")
         
         logger.info(f"Found {len(ranked)} bestselling products")
         return ranked
@@ -118,13 +130,20 @@ class BestsellerFinder:
         category: Optional[str],
         limit: int
     ) -> List[TrendingProduct]:
-        """Scrape Tokopedia bestsellers (using local cached data for speed)"""
+        """Load Tokopedia bestsellers from bulk JSON (no live scraping)"""
         try:
-            logger.info(f"Loading Tokopedia bestsellers from cache - category: {category}")
-            
-            # Use local_scrape_data for instant response (pre-scraped data)
-            # This avoids slow Firecrawl API calls and provides fast responses
+            logger.info(f"Loading Tokopedia bestsellers - category: {category}")
             search_query = self._category_to_query(category) if category else "produk terlaris"
+            
+            # ONLY PRIORITY: Load from bulk scraping JSON file (instant, no API calls)
+            logger.info(f"📂 Loading from bulk scraping JSON file...")
+            bulk_products = await self._load_from_bulk_json('tokopedia', category, limit)
+            if bulk_products:
+                logger.info(f"✅ Loaded {len(bulk_products)} products from bulk JSON")
+                return bulk_products
+            
+            # If JSON is empty, use local cache (no Apify/Firecrawl scraping)
+            logger.warning(f"⚠️ Bulk JSON empty, using local cache...")
             items = local_scrape_data.search_products(
                 query=search_query,
                 limit=limit
@@ -266,21 +285,19 @@ class BestsellerFinder:
         category: Optional[str],
         limit: int
     ) -> List[TrendingProduct]:
-        """Scrape Lazada bestsellers using Apify"""
+        """Load Lazada bestsellers from bulk JSON (no live scraping)"""
         try:
-            logger.info(f"Scraping Lazada bestsellers - category: {category}")
+            logger.info(f"Loading Lazada bestsellers - category: {category}")
             
-            if category:
-                search_query = self._category_to_query(category)
-            else:
-                search_query = "bestseller"
+            # ONLY PRIORITY: Load from bulk JSON
+            bulk_products = await self._load_from_bulk_json('lazada', category, limit)
+            if bulk_products:
+                logger.info(f"✅ Loaded {len(bulk_products)} Lazada products from bulk JSON")
+                return bulk_products
             
-            # Use Apify Lazada scraper (getdataforme/lazada-product-scraper)
-            results = await self.apify.scrape_lazada(
-                product_name=search_query,
-                max_items=limit,
-                min_rating=4.0
-            )
+            # If empty, return empty (no scraping)
+            logger.warning(f"⚠️ Lazada bulk JSON empty, no products available")
+            return []
             
             products = []
             for item in results:
@@ -330,27 +347,19 @@ class BestsellerFinder:
         category: Optional[str],
         limit: int
     ) -> List[TrendingProduct]:
-        """
-        Scrape Shopee bestsellers using Apify (with fallback to pre-scraped supplier data)
-        
-        This method will:
-        1. Try Apify Shopee scraper first (requires cookies)
-        2. Fall back to pre-scraped supplier data if API fails
-        """
+        """Load Shopee bestsellers from bulk JSON (no live scraping)"""
         try:
-            logger.info(f"Scraping Shopee bestsellers - category: {category}")
+            logger.info(f"Loading Shopee bestsellers - category: {category}")
             
-            if category:
-                search_query = self._category_to_query(category)
-            else:
-                search_query = "terlaris"
+            # ONLY PRIORITY: Load from bulk JSON
+            bulk_products = await self._load_from_bulk_json('shopee', category, limit)
+            if bulk_products:
+                logger.info(f"✅ Loaded {len(bulk_products)} Shopee products from bulk JSON")
+                return bulk_products
             
-            # Try Apify first (will automatically use fallback data if API fails)
-            results = await self.apify.scrape_shopee(
-                product_name=search_query,
-                max_items=limit,
-                min_rating=4.0
-            )
+            # If empty, return empty (no scraping)
+            logger.warning(f"⚠️ Shopee bulk JSON empty, no products available")
+            return []
             
             products = []
             
@@ -607,6 +616,103 @@ class BestsellerFinder:
                 return 0
         
         return 0
+    
+    async def _load_from_bulk_json(
+        self,
+        marketplace: str,
+        category: Optional[str],
+        limit: int
+    ) -> List[TrendingProduct]:
+        """
+        Load pre-scraped products from bulk JSON files in data/bulk_scraping/
+        
+        Files: tokopedia_products.json, lazada_products.json, shopee_products.json, amazon_products.json
+        """
+        try:
+            # Map marketplace to filename
+            filename_map = {
+                'tokopedia': 'tokopedia_products.json',
+                'lazada': 'lazada_products.json',
+                'shopee': 'shopee_products.json',
+                'amazon': 'amazon_products.json'
+            }
+            
+            filename = filename_map.get(marketplace.lower())
+            if not filename:
+                logger.warning(f"Unknown marketplace: {marketplace}")
+                return []
+            
+            filepath = Path(f"data/bulk_scraping/{filename}")
+            if not filepath.exists():
+                logger.info(f"Bulk JSON file not found: {filepath}")
+                return []
+            
+            # Load JSON file
+            with open(filepath, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            products_data = data.get('products', [])
+            if not products_data:
+                logger.info(f"No products in {filename}")
+                return []
+            
+            logger.info(f"📂 Found {len(products_data)} products in {filename}")
+            
+            # Parse products to TrendingProduct format
+            products = []
+            for item in products_data[:limit * 2]:  # Get more for filtering
+                try:
+                    # Parse based on marketplace format
+                    if marketplace.lower() in ['tokopedia', 'shopee', 'lazada']:
+                        product = parse_tokopedia_item(item, category, "bulk_scraping")
+                        if product:
+                            products.append(product)
+                    elif marketplace.lower() == 'amazon':
+                        # Amazon has different format, create directly
+                        # Parse price (can be dict or float)
+                        price_data = item.get('price', 0)
+                        if isinstance(price_data, dict):
+                            price_value = price_data.get('value', 0)
+                            currency = price_data.get('currency', '$')
+                            price_str = f"{currency}{price_value}"
+                        else:
+                            price_str = f"${price_data}" if price_data else "Varies"
+                        
+                        product = TrendingProduct(
+                            name=item.get('name', item.get('title', 'Unknown')),
+                            category=category or item.get('categoryName', 'General'),
+                            trend_score=80.0,  # High score for bulk scraped
+                            growth_percentage=50.0,
+                            search_volume=item.get('sold', item.get('totalSold', 1000)),
+                            region="Global",
+                            platform="Amazon",
+                            description=item.get('description', ''),
+                            image_url=item.get('thumbnailUrl', item.get('image', '')),
+                            price_range=price_str,
+                            keywords=[category] if category else [],
+                            rating=float(item.get('rating', 4.5)),
+                            total_sold=item.get('sold', 0),
+                            review_count=item.get('reviewCount', item.get('reviews', 0)),
+                            shop_name=item.get('seller', item.get('brand', 'Amazon')),
+                            shop_location=item.get('location', 'USA'),
+                            product_url=item.get('url', item.get('productUrl', '')),
+                            is_official=item.get('isAmazonChoice', False)
+                        )
+                        products.append(product)
+                except Exception as e:
+                    logger.warning(f"Error parsing bulk JSON item: {str(e)}")
+                    continue
+            
+            logger.info(f"✅ Parsed {len(products)} products from {filename}")
+            return products[:limit]
+            
+        except Exception as e:
+            logger.error(f"Error loading bulk JSON: {str(e)}")
+            return []
+    
+    async def _load_suppliers_from_data_folder(self, category: Optional[str], limit: int) -> List[TrendingProduct]:
+        """Load pre-scraped supplier data from data/suppliers/ folder (wrapper)"""
+        return await load_suppliers_from_data_folder(category, limit)
     
     async def generate_bestseller_report(
         self,

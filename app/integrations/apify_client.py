@@ -526,57 +526,120 @@ class ApifyIntegration:
         """
         try:
             if marketplace == "tokopedia":
+                location = item.get("shopLocation", "Indonesia")
+                
+                # Safely extract numeric fields
+                def safe_float(val, default=0.0):
+                    if isinstance(val, dict):
+                        return float(val.get('value', val.get('amount', default)))
+                    try:
+                        return float(val) if val else default
+                    except (ValueError, TypeError):
+                        return default
+                
+                def safe_int(val, default=0):
+                    if isinstance(val, dict):
+                        return int(val.get('value', val.get('count', default)))
+                    try:
+                        return int(val) if val else default
+                    except (ValueError, TypeError):
+                        return default
+                
                 return Supplier(
-                    name=item.get("sellerName", "Unknown"),
-                    store_name=item.get("shopName", "Unknown"),
+                    name=item.get("sellerName", item.get("shopName", "Unknown")),
+                    store_name=item.get("shopName", item.get("sellerName", "Unknown")),
                     marketplace="Tokopedia",
-                    location=item.get("shopLocation", "Indonesia"),
-                    rating=item.get("sellerRating", 0.0),
-                    product_name=item.get("name", ""),
-                    price=item.get("price", 0),
+                    location=location,
+                    city=location.split(',')[0] if ',' in location else location,
+                    rating=safe_float(item.get("sellerRating", item.get("rating", 4.0)), 4.0),
+                    product_name=item.get("name", item.get("productName", "Unknown Product")),
+                    price=safe_float(item.get("price", 0)),
                     currency="IDR",
-                    moq=item.get("minOrder", 1),
-                    stock_available=item.get("stock", 0) > 0,
+                    minimum_order=safe_int(item.get("minOrder", 1), 1),
+                    stock_available=(safe_int(item.get("stock", 1), 1)) > 0,
+                    url=item.get("url", item.get("productUrl", "")),
                     phone=item.get("phone", ""),
                     email=item.get("email", ""),
-                    product_url=item.get("url", ""),
-                    image_url=item.get("image", "")
+                    total_sold=safe_int(item.get("sold", item.get("totalSold", 0))),
+                    review_count=safe_int(item.get("reviewCount", 0))
                 )
             
             elif marketplace == "shopee":
+                location = item.get("shopLocation", item.get("location", "Indonesia"))
+                
+                # Safely extract numeric fields
+                def safe_float(val, default=0.0):
+                    if isinstance(val, dict):
+                        return float(val.get('value', val.get('amount', default)))
+                    try:
+                        return float(val) if val else default
+                    except (ValueError, TypeError):
+                        return default
+                
+                def safe_int(val, default=0):
+                    if isinstance(val, dict):
+                        return int(val.get('value', val.get('count', default)))
+                    try:
+                        return int(val) if val else default
+                    except (ValueError, TypeError):
+                        return default
+                
                 return Supplier(
-                    name=item.get("shopName", "Unknown"),
-                    store_name=item.get("shopName", "Unknown"),
+                    name=item.get("shopName", item.get("shop_name", "Unknown")),
+                    store_name=item.get("shopName", item.get("shop_name", "Unknown")),
                     marketplace="Shopee",
-                    location=item.get("shopLocation", "Indonesia"),
-                    rating=item.get("shopRating", 0.0),
-                    product_name=item.get("name", ""),
-                    price=item.get("price", 0),
+                    location=location,
+                    city=location.split(',')[0] if ',' in location else location,
+                    rating=safe_float(item.get("shopRating", item.get("rating", 4.5)), 4.5),
+                    product_name=item.get("name", item.get("title", "Unknown Product")),
+                    price=safe_float(item.get("price", 0)),
                     currency="IDR",
-                    moq=item.get("minPurchase", 1),
-                    stock_available=item.get("stock", 0) > 0,
+                    minimum_order=safe_int(item.get("minPurchase", item.get("min_purchase", 1)), 1),
+                    stock_available=(safe_int(item.get("stock", 1), 1)) > 0,
+                    url=item.get("url", item.get("product_url", "")),
                     phone=item.get("phone", ""),
                     email=item.get("email", ""),
-                    product_url=item.get("url", ""),
-                    image_url=item.get("image", "")
+                    total_sold=safe_int(item.get("sold", item.get("historical_sold", 0))),
+                    review_count=safe_int(item.get("review_count", 0))
                 )
             
             elif marketplace == "lazada":
+                location = item.get("sellerLocation", item.get("location", "Indonesia"))
+                
+                # Safely extract numeric fields
+                def safe_float(val, default=0.0):
+                    if isinstance(val, dict):
+                        return float(val.get('value', val.get('amount', default)))
+                    try:
+                        return float(val) if val else default
+                    except (ValueError, TypeError):
+                        return default
+                
+                def safe_int(val, default=0):
+                    if isinstance(val, dict):
+                        return int(val.get('value', val.get('count', default)))
+                    try:
+                        return int(val) if val else default
+                    except (ValueError, TypeError):
+                        return default
+                
                 return Supplier(
-                    name=item.get("sellerName", "Unknown"),
-                    store_name=item.get("sellerName", "Unknown"),
+                    name=item.get("sellerName", item.get("seller_name", "Unknown")),
+                    store_name=item.get("sellerName", item.get("seller_name", "Unknown")),
                     marketplace="Lazada",
-                    location=item.get("sellerLocation", "Indonesia"),
-                    rating=item.get("sellerRating", 0.0),
-                    product_name=item.get("name", ""),
-                    price=item.get("price", 0),
+                    location=location,
+                    city=location.split(',')[0] if ',' in location else location,
+                    rating=safe_float(item.get("sellerRating", item.get("rating", 4.0)), 4.0),
+                    product_name=item.get("name", item.get("product_name", "Unknown Product")),
+                    price=safe_float(item.get("price", 0)),
                     currency="IDR",
-                    moq=1,
-                    stock_available=True,
+                    minimum_order=1,
+                    stock_available=item.get("in_stock", True),
+                    url=item.get("url", item.get("product_url", "")),
                     phone=item.get("phone", ""),
                     email=item.get("email", ""),
-                    product_url=item.get("url", ""),
-                    image_url=item.get("image", "")
+                    total_sold=safe_int(item.get("sold", 0)),
+                    review_count=safe_int(item.get("review_count", 0))
                 )
             
             else:

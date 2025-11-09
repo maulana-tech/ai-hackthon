@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     lazada_api_host: str = "lazada-api.p.rapidapi.com"
     
     apify_api_key: str
-    scraping_mode: str = "api"  # "api" or "dummy"
+    scraping_mode: str = "api"  # "api" (real scraping) or "dummy" (mock data for testing)
     
     smtp_host: str = "smtp.gmail.com"
     smtp_port: int = 587

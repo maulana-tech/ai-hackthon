@@ -131,6 +131,7 @@ Available intents:
 Extract these parameters if mentioned:
 - "product_category": product type/category (e.g., "skincare", "fashion", "electronics")
 - "product_name": specific product name (e.g., "LED face mask", "macrame bag")
+- "marketplace": specific marketplace (e.g., "tokopedia", "amazon", "lazada", "shopee")
 - "location": preferred supplier location (e.g., "Jakarta", "Surabaya", "Indonesia")
 - "min_rating": minimum supplier rating (default: 4.0)
 - "limit": number of results wanted (default: 5)
@@ -156,7 +157,19 @@ Output: {
   "confidence": 0.9,
   "parameters": {
     "product_category": "fashion",
-    "marketplace": "tokopedia"
+    "marketplace": "tokopedia",
+    "limit": 10
+  }
+}
+
+Query: "Best sellers Amazon electronics"
+Output: {
+  "intent": "find_bestsellers",
+  "confidence": 0.95,
+  "parameters": {
+    "product_category": "electronics",
+    "marketplace": "amazon",
+    "limit": 10
   }
 }
 
@@ -169,13 +182,22 @@ Output: {
   }
 }
 
-Query: "Cari supplier tas macrame di Jakarta"
+Query: "Carikan supplier untuk skincare"
 Output: {
   "intent": "find_suppliers",
   "confidence": 0.9,
   "parameters": {
-    "product_name": "tas macrame",
-    "location": "Jakarta"
+    "product_name": "skincare"
+  }
+}
+
+Query: "Produk terlaris di Tokopedia"
+Output: {
+  "intent": "find_bestsellers",
+  "confidence": 0.95,
+  "parameters": {
+    "marketplace": "tokopedia",
+    "limit": 10
   }
 }
 
@@ -202,14 +224,51 @@ Always respond with valid JSON only, no additional text."""
         """Simple fallback classification using keywords"""
         query_lower = query.lower()
         
+        # Extract marketplace from query
+        marketplace = None
+        if "tokopedia" in query_lower:
+            marketplace = "tokopedia"
+        elif "amazon" in query_lower:
+            marketplace = "amazon"
+        elif "lazada" in query_lower:
+            marketplace = "lazada"
+        elif "shopee" in query_lower:
+            marketplace = "shopee"
+        
         # Check for bestseller/terlaris keywords first (highest priority)
         if any(word in query_lower for word in ["terlaris", "paling laris", "bestseller", "best seller", "paling banyak terjual", "most sold"]):
+            params = {
+                "limit": 10,
+                "min_sold": 100
+            }
+            if marketplace:
+                params["marketplace"] = marketplace
+            
             return {
                 "intent": "find_bestsellers",
                 "confidence": 0.8,
+                "parameters": params
+            }
+        
+        # "Carikan supplier untuk X" = user wants to find suppliers (not bestsellers)
+        if any(pattern in query_lower for pattern in ["carikan supplier", "supplier untuk", "cari supplier", "supplier terbaik", "supplier bagus"]):
+            # Extract product name after "untuk" or after "supplier"
+            product_name = None
+            if "untuk" in query_lower:
+                parts = query_lower.split("untuk")
+                if len(parts) > 1:
+                    product_name = parts[1].strip()
+            elif "supplier" in query_lower:
+                parts = query_lower.split("supplier")
+                if len(parts) > 1:
+                    product_name = parts[1].strip()
+            
+            return {
+                "intent": "find_suppliers",
+                "confidence": 0.85,
                 "parameters": {
-                    "limit": 10,
-                    "min_sold": 100
+                    "product_name": product_name,
+                    "limit": 10
                 }
             }
         
@@ -227,10 +286,11 @@ Always respond with valid JSON only, no additional text."""
                 "parameters": {}
             }
         
-        if any(word in query_lower for word in ["supplier", "penjual", "toko", "cari"]):
+        # Generic product search
+        if any(word in query_lower for word in ["produk", "barang", "jual", "beli"]):
             return {
-                "intent": "find_suppliers",
-                "confidence": 0.7,
+                "intent": "find_bestsellers",
+                "confidence": 0.6,
                 "parameters": {}
             }
         
