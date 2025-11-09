@@ -221,11 +221,18 @@ async def _generate_natural_response(
         return _format_campaign_response(results_data, user_name)
     
     else:
-        # Generic response
+        # Generic response with more details
         summary = results_data.get('summary', '')
+        message = results_data.get('message', '')
+        
         if summary:
             return f"Hai {user_name}! 👋\n\n{summary}"
+        elif message:
+            return f"Hai {user_name}! 👋\n\n{message}"
         else:
+            # Show available data keys for debugging
+            data_keys = list(results_data.keys()) if results_data else []
+            logger.warning(f"Generic response fallback. Intent: {intent}, Data keys: {data_keys}")
             return (
                 f"Hai {user_name}! Saya sudah memproses permintaan Anda. "
                 f"Silakan cek detail hasilnya! 😊"
@@ -654,7 +661,10 @@ def _format_campaign_response(results: Dict[str, Any], user_name: str) -> str:
     # Single campaign
     elif campaign:
         product = campaign.get('product', 'Product')
-        response = f"🎯 Hai {user_name}! Kampanye untuk **{product}** sudah siap!\n\n"
+        message = results.get('message', '')
+        
+        response = f"🎯 Hai {user_name}! {message}\n\n"
+        response += f"📋 **Campaign: {product}**\n\n"
         
         # Generate complete campaign document content
         campaign_doc_content = _generate_campaign_document(campaign)
