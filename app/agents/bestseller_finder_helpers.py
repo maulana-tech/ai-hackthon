@@ -207,6 +207,9 @@ def parse_tokopedia_item(item: Dict[str, Any], category: Optional[str], search_q
             official_bonus * 0.1
         )
         
+        # Set minimum score of 80 for bulk scraped data (same as Amazon for fair ranking)
+        trend_score = max(trend_score, 80.0)
+        
         product = TrendingProduct(
             name=name,
             category=category or "General",

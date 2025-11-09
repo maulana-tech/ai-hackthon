@@ -321,14 +321,14 @@ class SuperAgent:
         category = params.get("product_category") or params.get("category")
         marketplace = params.get("marketplace")  # Can be None for all marketplaces
         limit = params.get("limit", 10)
-        min_sold = params.get("min_sold", 100)  # Minimum units sold to qualify as bestseller
+        min_sold = params.get("min_sold", 0)  # Changed from 100 to 0 for bulk JSON data
         
         bestsellers = await self.bestseller_finder.find_bestsellers(
             category=category,
             marketplace=marketplace,
             limit=limit,
             min_sold=min_sold,
-            min_rating=params.get("min_rating", 4.0)
+            min_rating=params.get("min_rating", 3.0)  # Changed from 4.0 to 3.0
         )
         
         if not bestsellers:

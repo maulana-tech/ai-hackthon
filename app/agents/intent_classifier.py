@@ -239,7 +239,7 @@ Always respond with valid JSON only, no additional text."""
         if any(word in query_lower for word in ["terlaris", "paling laris", "bestseller", "best seller", "paling banyak terjual", "most sold"]):
             params = {
                 "limit": 10,
-                "min_sold": 100
+                "min_sold": 0  # Changed from 100 to 0 for bulk JSON data
             }
             if marketplace:
                 params["marketplace"] = marketplace

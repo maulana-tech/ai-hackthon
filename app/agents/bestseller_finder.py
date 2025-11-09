@@ -49,8 +49,8 @@ class BestsellerFinder:
         category: Optional[str] = None,
         marketplace: Optional[str] = None,
         limit: int = 10,
-        min_sold: int = 100,
-        min_rating: float = 4.0
+        min_sold: int = 0,  # Changed from 100 to 0 for bulk JSON data
+        min_rating: float = 3.0  # Changed from 4.0 to 3.0 for more results
     ) -> List[TrendingProduct]:
         """
         Find bestselling products across marketplaces
@@ -71,7 +71,7 @@ class BestsellerFinder:
         
         # Determine which marketplaces to scrape
         marketplaces = []
-        if marketplace:
+        if marketplace and marketplace.lower() != 'all':
             marketplaces = [marketplace.lower()]
         else:
             # Default: Try all marketplaces with data
@@ -531,21 +531,33 @@ class BestsellerFinder:
         return round(trend_score, 2)
     
     def _rank_products(self, products: List[TrendingProduct], limit: int) -> List[TrendingProduct]:
-        """Rank products by multiple factors"""
+        """Rank products by multiple factors with platform diversity"""
+        # Group by platform first for diversity
+        by_platform = {}
+        for p in products:
+            by_platform.setdefault(p.platform, []).append(p)
         
-        # Sort by: trend_score (primary), total_sold (secondary), rating (tertiary)
-        sorted_products = sorted(
-            products,
-            key=lambda p: (
-                p.trend_score,
-                p.total_sold or 0,
-                p.rating or 0,
-                p.is_official
-            ),
-            reverse=True
-        )
+        # Sort products within each platform
+        for platform in by_platform:
+            by_platform[platform] = sorted(
+                by_platform[platform],
+                key=lambda p: (p.trend_score, p.total_sold or 0, p.rating or 0, p.is_official),
+                reverse=True
+            )
         
-        return sorted_products[:limit]
+        # Interleave products from different platforms for diversity
+        result = []
+        platforms = list(by_platform.keys())
+        max_per_platform = max(len(prods) for prods in by_platform.values()) if by_platform else 0
+        
+        for i in range(max_per_platform):
+            for platform in platforms:
+                if i < len(by_platform[platform]):
+                    result.append(by_platform[platform][i])
+                    if len(result) >= limit:
+                        return result
+        
+        return result[:limit]
     
     def _category_to_query(self, category: str) -> str:
         """Convert category to Indonesian search query"""
