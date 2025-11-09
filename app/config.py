@@ -19,13 +19,14 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openrouter_api_key: str = ""
     gemini_api_key: str = ""
-    llm_provider: str = "gemini"  # "openai", "openrouter", or "gemini"
-    llm_model: str = "qwen/qwq-32b-preview"  # Qwen 3 model
+    llm_provider: str = "openrouter"  # "openai", "openrouter", or "gemini"
+    llm_model: str = "google/gemini-2.0-flash-exp:free"  # Free OpenRouter model
     
     rapidapi_key: str
     lazada_api_host: str = "lazada-api.p.rapidapi.com"
     
     apify_api_key: str
+    scraping_mode: str = "api"  # "api" or "dummy"
     
     smtp_host: str = "smtp.gmail.com"
     smtp_port: int = 587

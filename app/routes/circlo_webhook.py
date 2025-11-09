@@ -237,8 +237,13 @@ def _format_bestsellers_response(results: Dict[str, Any], user_name: str) -> str
     
     if not bestsellers:
         return (
-            f"Hai {user_name}! Saya tidak menemukan produk bestseller saat ini. "
-            f"Coba cari kategori lain? 🔍"
+            f"Hai {user_name}! 🔍\n\n"
+            f"Saya belum menemukan produk bestseller yang sesuai kriteria.\n\n"
+            f"**Tips:**\n"
+            f"• Coba kata kunci yang lebih umum (misal: 'fashion' bukan 'baju batik premium')\n"
+            f"• Gunakan kategori populer: skincare, elektronik, fashion, home decor\n"
+            f"• Coba marketplace spesifik: 'produk terlaris di Tokopedia'\n\n"
+            f"Atau tanyakan: \"Apa produk yang sedang trending?\""
         )
     
     response = f"🔥 Hai {user_name}! Saya menemukan **{len(bestsellers)} produk terlaris** untuk Anda:\n\n"
@@ -259,6 +264,16 @@ def _format_bestsellers_response(results: Dict[str, Any], user_name: str) -> str
         response += f"💰 Harga: {price}\n\n"
         response += f"🏪 {platform}\n"
         response += f"Toko: {shop}\n"
+        
+        # Add description with supplier email if available (especially for Shopee fallback data)
+        description = product.get('description', '')
+        if description and '@' in description:
+            # Extract and highlight email
+            response += f"\n📧 **Contact:** {description}\n"
+        elif description:
+            # Show description for context
+            desc_short = description[:150] + ('...' if len(description) > 150 else '')
+            response += f"\n💬 {desc_short}\n"
         
         # Add CTA button if product URL available
         if product_url:
@@ -371,8 +386,13 @@ def _format_suppliers_response(results: Dict[str, Any], user_name: str) -> str:
     
     if not suppliers:
         return (
-            f"Hai {user_name}! Belum ada supplier yang ditemukan untuk produk ini. "
-            f"Coba produk lain? 🔍"
+            f"Hai {user_name}! 📦\n\n"
+            f"Belum menemukan supplier untuk produk ini.\n\n"
+            f"**Saran:**\n"
+            f"• Pastikan nama produk spesifik (misal: 'sepatu sneakers' bukan 'alas kaki')\n"
+            f"• Cari produk yang umum tersedia di marketplace\n"
+            f"• Gunakan kata kunci bahasa Indonesia\n\n"
+            f"Atau coba: \"Carikan supplier untuk [nama produk]\""
         )
     
     response = f"📦 Hai {user_name}! Saya menemukan **{len(suppliers)} supplier** untuk Anda:\n\n"

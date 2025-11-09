@@ -104,8 +104,9 @@ class LLMClient:
         Uses gemini-1.5-flash for speed
         """
         try:
-            # Gemini uses different endpoint format
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={self.api_key}"
+            # Gemini uses v1 endpoint (v1beta deprecated for some models)
+            # Use gemini-1.5-flash-latest for stable API
+            url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash-latest:generateContent?key={self.api_key}"
             
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
@@ -160,8 +161,10 @@ class LLMClient:
                 response = await client.post(
                     "https://openrouter.ai/api/v1/chat/completions",
                     headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json"
+                        "Authorization": f"Bearer {self.openrouter_key}",  # Use explicit key
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": "https://trendscout.ai",  # Required by OpenRouter
+                        "X-Title": "TrendScout AI Agent"  # Optional but recommended
                     },
                     json={
                         "model": self.model,
@@ -175,9 +178,12 @@ class LLMClient:
                 
                 if response.status_code == 200:
                     data = response.json()
-                    return data["choices"][0]["message"]["content"]
+                    result = data["choices"][0]["message"]["content"]
+                    logger.info(f"✅ OpenRouter generated {len(result)} chars")
+                    return result
                 else:
-                    logger.error(f"OpenRouter API error: {response.status_code}")
+                    error_text = response.text[:500]
+                    logger.error(f"OpenRouter API error: {response.status_code} - {error_text}")
                     return self._fallback_generate(prompt)
                     
         except Exception as e:
